@@ -1,0 +1,23 @@
+{
+  "name": "universal-tracker-backend",
+  "version": "1.0.0",
+  "description": "Universal Tracker Backend",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js"
+  },
+  "dependencies": {
+    "bcrypt": "^5.1.0",
+    "cors": "^2.8.6",
+    "dotenv": "^16.6.1",
+    "express": "^4.18.2",
+    "jsonwebtoken": "^9.0.2",
+    "mongodb": "^7.5.0",
+    "mongoose": "^7.8.12",
+    "node-cron": "^3.0.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}
