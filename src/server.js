@@ -108,10 +108,7 @@ app.delete("/api/trackers/:id", async (req, res) => {
 // ----------------------
 
 const PORT = process.env.PORT || 5000;
-const MONGO_URI =
-  process.env.MONGODB_URI ||
-  process.env.MONGO_URI ||
-  "mongodb://127.0.0.1:27017/trackers_db";
+const MONGO_URI = process.env.MONGODB_URI;
 
 mongoose
   .connect(MONGO_URI)
