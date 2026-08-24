@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 const CryptoJS = require("crypto-js");
 
 // Use a secret key from your environment variables (must be kept secret!)
-const SECRET_KEY = process.env.ENCRYPTION_KEY;
+const SECRET_KEY = process.env.ENCRYPTION_KEY || "your_fallback_super_secret_key_32_bytes";
 
 // Helper encryption functions
 const encryptData = (text) => {
