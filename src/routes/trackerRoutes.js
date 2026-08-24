@@ -8,8 +8,8 @@ const router = express.Router();
 // Helper to safely extract user ID regardless of JWT payload format
 const getUserId = (req) => req.user?.id || req.user?._id;
 
-// Get all trackers for logged-in user
-router.get("/trackers", auth, async (req, res) => {
+// Get all trackers for logged-in user (Matches: GET /api/v1/trackers)
+router.get("/", auth, async (req, res) => {
   try {
     const userId = getUserId(req);
     if (!userId) return res.status(401).json({ message: "Unauthorized user session." });
@@ -21,8 +21,8 @@ router.get("/trackers", auth, async (req, res) => {
   }
 });
 
-// Create tracker for logged-in user
-router.post("/trackers", auth, async (req, res) => {
+// Create tracker for logged-in user (Matches: POST /api/v1/trackers)
+router.post("/", auth, async (req, res) => {
   try {
     const userId = getUserId(req);
     if (!userId) return res.status(401).json({ message: "Unauthorized user session." });
@@ -33,7 +33,6 @@ router.post("/trackers", auth, async (req, res) => {
       return res.status(400).json({ message: "Name and type are required fields." });
     }
 
-    // Explicit field assignment prevents user malicious override of userId
     const tracker = new Tracker({
       userId,
       name,
@@ -52,8 +51,8 @@ router.post("/trackers", auth, async (req, res) => {
   }
 });
 
-// Update tracker
-router.put("/trackers/:id", auth, async (req, res) => {
+// Update tracker (Matches: PUT /api/v1/trackers/:id)
+router.put("/:id", auth, async (req, res) => {
   try {
     const userId = getUserId(req);
     const { id } = req.params;
@@ -62,7 +61,6 @@ router.put("/trackers/:id", auth, async (req, res) => {
       return res.status(400).json({ message: "Invalid tracker ID format." });
     }
 
-    // Prevent overwriting internal ownership fields
     const { _id, userId: bodyUserId, ...updateData } = req.body;
 
     const tracker = await Tracker.findOneAndUpdate(
@@ -78,8 +76,8 @@ router.put("/trackers/:id", auth, async (req, res) => {
   }
 });
 
-// Delete tracker
-router.delete("/trackers/:id", auth, async (req, res) => {
+// Delete tracker (Matches: DELETE /api/v1/trackers/:id)
+router.delete("/:id", auth, async (req, res) => {
   try {
     const userId = getUserId(req);
     const { id } = req.params;
