@@ -22,13 +22,21 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Root Route
+app.get("/", (req, res) => {
+  res.status(200).json({
+    status: "success",
+    message: "API service is running.",
+    health: "/health"
+  });
+});
+
 // Base Health Check
 app.get("/health", (req, res) => res.status(200).send("OK"));
 
 // API Routes (Prefixing all routes under /api/v1)
 app.use("/api/v1/auth", authRoutes);
-app.use("/api/v1/trackers", trackerRoutes); 
-// Note: If trackerRoutes already contains "/trackers" inside it, use: app.use("/api/v1", trackerRoutes);
+app.use("/api/v1/trackers", trackerRoutes);
 
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGODB_URI;
