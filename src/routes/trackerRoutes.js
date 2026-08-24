@@ -21,6 +21,38 @@ router.get("/", auth, async (req, res) => {
   }
 });
 
+// Get a single tracker by ID (Matches: GET /api/v1/trackers/:id)
+router.get("/:id", auth, async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid tracker ID format." });
+    }
+
+    const tracker = await Tracker.findOne({ _id: id, userId });
+
+    if (!tracker) {
+      return res.status(404).json({ message: "Tracker not found or unauthorized." });
+    }
+
+    // Returns full tracker details along with decrypted entries
+    res.status(200).json({
+      status: "success",
+      data: {
+        ...tracker.toObject(),
+        trackerName: tracker.name,
+        unit: tracker.unit,
+        target: tracker.target,
+        entries: tracker.entries, // Decrypted automatically by Mongoose middleware
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ message: "Server error", error: err.message });
+  }
+});
+
 // Create tracker for logged-in user (Matches: POST /api/v1/trackers)
 router.post("/", auth, async (req, res) => {
   try {
