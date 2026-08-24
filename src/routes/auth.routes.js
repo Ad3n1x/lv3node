@@ -1,19 +1,13 @@
 const express = require("express");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-const nodemailer = require("nodemailer");
+const { Resend } = require("resend");
 const User = require("../models/User");
 
 const router = express.Router();
 
-// Configure Nodemailer transporter
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: {
-    user: process.env.EMAIL_USER, // Your Gmail address in .env
-    pass: process.env.EMAIL_PASS, // Your Gmail App Password in .env
-  },
-});
+// Initialize Resend with your environment variable (Secure!)
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 // POST /api/v1/auth/register (Step 1: Save unverified user & send OTP)
 router.post("/register", async (req, res) => {
@@ -39,7 +33,6 @@ router.post("/register", async (req, res) => {
     const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
 
     if (existingUser && !existingUser.isVerified) {
-      // Update existing unverified user with new details & fresh OTP
       existingUser.firstName = firstName.trim();
       existingUser.lastName = lastName.trim();
       existingUser.password = hashedPassword;
@@ -47,7 +40,6 @@ router.post("/register", async (req, res) => {
       existingUser.otpExpires = otpExpires;
       await existingUser.save();
     } else {
-      // Create brand new unverified user entry
       await User.create({
         firstName: firstName.trim(),
         lastName: lastName.trim(),
@@ -59,22 +51,49 @@ router.post("/register", async (req, res) => {
       });
     }
 
-    // Send the OTP via Email
-    const mailOptions = {
-      from: process.env.EMAIL_USER,
-      to: cleanEmail,
-      subject: "Account Verification OTP",
+    // Send the OTP via Resend using your custom template
+    await resend.emails.send({
+      from: 'Tracker App <onboarding@resend.dev>',
+      to: [cleanEmail],
+      subject: '🔐 Your Verification Code — Tracker App',
       html: `
-        <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
-          <h2>Welcome to Tracker App!</h2>
-          <p>Your verification code is:</p>
-          <h1 style="color: #0d6efd; letter-spacing: 2px;">${otp}</h1>
-          <p>This code will expire in 10 minutes.</p>
+        <div style="background-color: #f8f9fa; padding: 40px 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;">
+          <div style="max-width: 480px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.05); border: 1px solid #e9ecef;">
+            
+            <!-- Header -->
+            <div style="background: linear-gradient(135deg, #0d6efd 0%, #0a58ca 100%); padding: 30px; text-align: center; color: #ffffff;">
+              <h1 style="margin: 0; font-size: 24px; font-weight: 700; letter-spacing: 0.5px;">Tracker App</h1>
+              <p style="margin: 8px 0 0 0; font-size: 14px; opacity: 0.9;">Secure Account Verification</p>
+            </div>
+
+            <!-- Body -->
+            <div style="padding: 35px 30px; text-align: left; color: #495057;">
+              <p style="margin-top: 0; font-size: 16px; font-weight: 500;">Hello <strong>${firstName}</strong>,</p>
+              <p style="font-size: 15px; line-height: 1.5; color: #6c757d;">
+                Thank you for signing up! Use the secure verification code below to activate your account. This code is valid for <strong>10 minutes</strong>.
+              </p>
+
+              <!-- OTP Box Badge -->
+              <div style="margin: 30px 0; text-align: center;">
+                <div style="display: inline-block; background-color: #f1f3f5; border: 2px dashed #ced4da; border-radius: 8px; padding: 15px 30px; font-size: 32px; font-weight: 800; letter-spacing: 6px; color: #0d6efd;">
+                  ${otp}
+                </div>
+              </div>
+
+              <p style="font-size: 13px; color: #adb5bd; line-height: 1.4; margin-bottom: 0;">
+                If you didn't request this code, you can safely ignore this email. Someone else might have typed your email address by mistake.
+              </p>
+            </div>
+
+            <!-- Footer -->
+            <div style="background-color: #f8f9fa; padding: 15px 30px; text-align: center; font-size: 12px; color: #adb5bd; border-top: 1px solid #e9ecef;">
+              &copy; ${new Date().getFullYear()} Tracker App. All rights reserved.
+            </div>
+
+          </div>
         </div>
       `,
-    };
-
-    await transporter.sendMail(mailOptions);
+    });
 
     return res.status(200).json({
       message: "Registration successful! Please check your email for the OTP.",
@@ -84,7 +103,7 @@ router.post("/register", async (req, res) => {
   }
 });
 
-// POST /api/v1/auth/verify-otp (Step 2: Verify code, activate user, return token)
+// POST /api/v1/auth/verify-otp
 router.post("/verify-otp", async (req, res) => {
   try {
     const { email, otp } = req.body;
@@ -108,13 +127,11 @@ router.post("/verify-otp", async (req, res) => {
       return res.status(400).json({ message: "Invalid or expired OTP code." });
     }
 
-    // Activate user and clear out OTP tracking fields
     user.isVerified = true;
     user.otp = undefined;
     user.otpExpires = undefined;
     await user.save();
 
-    // Issue JWT token upon successful verification
     const token = jwt.sign(
       { id: user._id, email: user.email },
       process.env.JWT_SECRET || "your_jwt_secret_key",
@@ -145,10 +162,9 @@ router.post("/login", async (req, res) => {
 
     const user = await User.findOne({ email: cleanEmail });
     if (!user) {
-      return res.status(401).json({ message: "Invalid email or password." });
+      return res.path ? null : res.status(401).json({ message: "Invalid email or password." });
     }
 
-    // Optional check: ensure they are verified before letting them log in
     if (!user.isVerified) {
       return res.status(403).json({ message: "Please verify your email with the OTP sent during registration." });
     }
