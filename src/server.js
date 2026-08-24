@@ -1,9 +1,11 @@
 require("dotenv").config();
+const dns = require("dns");
+dns.setServers(["8.8.8.8", "8.8.4.4"])
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
 
-const authRoutes = require("./routes/authRoutes");
+const authRoutes = require("./routes/auth.routes");
 const trackerRoutes = require("./routes/trackerRoutes");
 
 const app = express();
@@ -15,9 +17,11 @@ app.use("/api/v1", authRoutes);
 app.use("/api", trackerRoutes);
 
 const PORT = process.env.PORT || 5000;
-const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017/tracker_db";
+// Added IPv4 local fallback to prevent the 'undefined' URI error and IPv6 connection issues
+const MONGO_URI = process.env.MONGODB_URI;
 
-mongoose.connect(MONGO_URI)
+mongoose
+  .connect(MONGO_URI)
   .then(() => {
     console.log("Connected to MongoDB");
     app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
