@@ -7,7 +7,6 @@ const cors = require("cors");
 const authRoutes = require("./routes/auth.routes");
 const trackerRoutes = require("./routes/trackerRoutes");
 
-// Fallback to Google DNS only if resolving SRV records fails on cloud providers
 if (process.env.MONGODB_URI && process.env.MONGODB_URI.startsWith("mongodb+srv://")) {
   try {
     dns.setServers(["8.8.8.8", "8.8.4.4"]);
@@ -18,23 +17,20 @@ if (process.env.MONGODB_URI && process.env.MONGODB_URI.startsWith("mongodb+srv:/
 
 const app = express();
 
-// Middleware
 app.use(cors());
 app.use(express.json());
 
-// Root Route
 app.get("/", (req, res) => {
   res.status(200).json({
     status: "success",
     message: "API service is running.",
-    health: "/health"
+    health: "/health",
   });
 });
 
-// Base Health Check
 app.get("/health", (req, res) => res.status(200).send("OK"));
 
-// API Routes (Prefixing all routes under /api/v1)
+// Routes mounted at /api/v1/auth
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/trackers", trackerRoutes);
 
