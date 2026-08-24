@@ -7,7 +7,6 @@ const SECRET_KEY = process.env.ENCRYPTION_KEY || "your_fallback_super_secret_key
 // Helper encryption functions
 const encryptData = (text) => {
   if (text === null || text === undefined) return text;
-  // Convert objects/numbers to strings before encrypting if needed
   const stringValue = typeof text === "object" ? JSON.stringify(text) : String(text);
   return CryptoJS.AES.encrypt(stringValue, SECRET_KEY).toString();
 };
@@ -18,7 +17,6 @@ const decryptData = (ciphertext) => {
     const bytes = CryptoJS.AES.decrypt(ciphertext, SECRET_KEY);
     const decryptedString = bytes.toString(CryptoJS.enc.Utf8);
     
-    // Try to parse back to original type (JSON/Number/Boolean/String) if possible
     try {
       return JSON.parse(decryptedString);
     } catch {
@@ -26,53 +24,69 @@ const decryptData = (ciphertext) => {
     }
   } catch (error) {
     console.error("Decryption error:", error);
-    return ciphertext; // Return raw if decryption fails
+    return ciphertext;
   }
 };
 
 const trackerSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
-  name: { type: String, required: true }, // Will be stored encrypted
-  type: { type: String, required: true }, // Kept clear for schema filtering
+  name: { type: String, required: true }, // Encrypted
+  type: { type: String, required: true }, // Clear for querying
   icon: { type: String, default: "Star" },
   color: { type: String, default: "#3b82f6" },
-  target: { type: mongoose.Schema.Types.Mixed }, // Can be encrypted if target values are sensitive
+  target: { type: mongoose.Schema.Types.Mixed }, // Encrypted
   unit: { type: String },
   entries: [
     {
-      date: { type: String, required: true }, // "YYYY-MM-DD" (kept clear for sorting/matching)
-      value: { type: mongoose.Schema.Types.Mixed }, // Will be stored encrypted
+      date: { type: String, required: true }, // Clear for sorting/matching
+      value: { type: mongoose.Schema.Types.Mixed }, // Encrypted
     },
   ],
 }, { timestamps: true });
 
-// --- MIDDLEWARE: ENCRYPT BEFORE SAVING TO DATABASE ---
+// --- 1. ENCRYPT BEFORE SAVING (Handles new Tracker() & .save()) ---
 trackerSchema.pre("save", function (next) {
-  // Encrypt tracker name
   if (this.isModified("name")) {
     this.name = encryptData(this.name);
   }
-
-  // Encrypt target if present
   if (this.isModified("target") && this.target !== undefined) {
     this.target = encryptData(this.target);
   }
-
-  // Encrypt entry values
   if (this.isModified("entries")) {
     this.entries = this.entries.map((entry) => ({
       ...entry,
       value: encryptData(entry.value),
     }));
-    this.markModified("entries"); // Crucial so Mongoose persists the encrypted array changes
+    this.markModified("entries");
+  }
+  next();
+});
+
+// --- 2. ENCRYPT BEFORE FIND ONE AND UPDATE (Handles findByIdAndUpdate) ---
+trackerSchema.pre("findOneAndUpdate", function (next) {
+  const update = this.getUpdate();
+  if (!update) return next();
+
+  const targetObj = update.$set || update;
+
+  if (targetObj.name) {
+    targetObj.name = encryptData(targetObj.name);
+  }
+  if (targetObj.target !== undefined) {
+    targetObj.target = encryptData(targetObj.target);
+  }
+  if (targetObj.entries) {
+    targetObj.entries = targetObj.entries.map((entry) => ({
+      ...entry,
+      value: encryptData(entry.value),
+    }));
   }
 
   next();
 });
 
-// --- MIDDLEWARE: DECRYPT WHEN FETCHING FROM DATABASE ---
-// Handles single documents and queries
-trackerSchema.post(/^find|save/, function (docs) {
+// --- 3. DECRYPT WHEN FETCHING OR RETURNING DOCUMENTS ---
+trackerSchema.post(/^find|save|findOneAndUpdate/, function (docs) {
   if (!docs) return;
 
   const decryptDocument = (doc) => {
