@@ -18,9 +18,10 @@
     "jsonwebtoken": "^9.0.2",
     "mongodb": "^7.5.0",
     "mongoose": "^7.8.12",
-    "node-cron": "^3.0.2",
+    "node-cron": "^3.0.3",
     "nodemailer": "^9.0.5",
-    "resend": "^6.22.1"
+    "resend": "^6.22.1",
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"
