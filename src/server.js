@@ -24,10 +24,10 @@ if (
 
 const app = express();
 
-// Middleware & CORS Configuration for Cross-Origin Updates
+// Middleware & CORS Configuration (Fixed to accept live frontend & local environments)
 app.use(
   cors({
-    origin: ["http://localhost:5173", "http://localhost:3000"],
+    origin: true, // Dynamically allows any frontend origin making the request
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
