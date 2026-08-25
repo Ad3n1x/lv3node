@@ -48,7 +48,7 @@ const trackerSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// --- AUTOMATIC DECRYPTION ON JSON OUTPUT (Used by Express res.json()) ---
+// --- AUTOMATIC DECRYPTION ON JSON OUTPUT ---
 trackerSchema.set("toJSON", {
   transform: function (doc, ret) {
     ret.name = decryptData(ret.name);
@@ -85,7 +85,7 @@ trackerSchema.set("toObject", {
   },
 });
 
-// --- ENCRYPTION BEFORE SAVING / UPDATING ---
+// --- ENCRYPTION BEFORE SAVING ---
 trackerSchema.pre("save", function (next) {
   if (this.isModified("name") && this.name && !String(this.name).startsWith("U2FsdGVkX1")) {
     this.name = encryptData(this.name);
@@ -102,9 +102,11 @@ trackerSchema.pre("save", function (next) {
   next();
 });
 
+// --- ENCRYPTION BEFORE FINDONEANDUPDATE ---
 trackerSchema.pre("findOneAndUpdate", function (next) {
   const update = this.getUpdate();
   if (!update) return next();
+  
   const targetObj = update.$set || update;
 
   if (targetObj.name && !String(targetObj.name).startsWith("U2FsdGVkX1")) {

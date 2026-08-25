@@ -1,17 +1,19 @@
 const express = require("express");
 const mongoose = require("mongoose");
+const CryptoJS = require("crypto-js");
 const Tracker = require("../models/Tracker");
 const auth = require("../middleware/auth");
 
 const router = express.Router();
+const SECRET_KEY = process.env.ENCRYPTION_KEY || "your_fallback_super_secret_key_32_bytes";
 
-// 🛡️ Enhanced Helper: Safely extracts user ID from any JWT payload structure (id, _id, or userId)
+// 🛡️ Enhanced Helper: Safely extracts user ID from any JWT payload structure
 const getUserId = (req) => {
   if (!req.user) return null;
   return req.user.id || req.user._id || req.user.userId || (typeof req.user === "string" ? req.user : null);
 };
 
-// Get all trackers for logged-in user (Matches: GET /api/v1/trackers)
+// Get all trackers for logged-in user
 router.get("/", auth, async (req, res) => {
   try {
     const userId = getUserId(req);
@@ -24,7 +26,7 @@ router.get("/", auth, async (req, res) => {
   }
 });
 
-// Get a single tracker by ID (Matches: GET /api/v1/trackers/:id)
+// Get a single tracker by ID
 router.get("/:id", auth, async (req, res) => {
   try {
     const userId = getUserId(req);
@@ -55,22 +57,19 @@ router.get("/:id", auth, async (req, res) => {
   }
 });
 
-// Create tracker for logged-in user (Matches: POST /api/v1/trackers)
+// Create tracker for logged-in user
 router.post("/", auth, async (req, res) => {
   try {
     const userId = getUserId(req);
     if (!userId) {
-      return res.status(401).json({ 
-        message: "Unauthorized: User ID could not be extracted from token." 
-      });
+      return res.status(401).json({ message: "Unauthorized: User ID could not be extracted from token." });
     }
 
-    // Ensure req.body exists to prevent destructuring crashes
     const { name, type, icon, color, target, unit, entries } = req.body || {};
 
     if (!name || !type) {
       return res.status(400).json({ 
-        message: "Validation Error: 'name' and 'type' are required fields in the request body.",
+        message: "Validation Error: 'name' and 'type' are required fields.",
         receivedBody: req.body 
       });
     }
@@ -94,7 +93,57 @@ router.post("/", auth, async (req, res) => {
   }
 });
 
-// Update tracker (Matches: PUT /api/v1/trackers/:id)
+// --- NEW: Dedicated Endpoint to Add an Entry Permanently ---
+router.post("/:id/entries", auth, async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid tracker ID format." });
+    }
+
+    const tracker = await Tracker.findOne({ _id: id, userId });
+    if (!tracker) {
+      return res.status(404).json({ message: "Tracker not found or unauthorized." });
+    }
+
+    // Safely extract existing encrypted entries and decrypt them in-memory
+    let currentEntries = [];
+    if (tracker.entries) {
+      let rawEntries = tracker.entries;
+      if (typeof rawEntries === "string" && rawEntries.startsWith("U2FsdGVkX1")) {
+        try {
+          const bytes = CryptoJS.AES.decrypt(rawEntries, SECRET_KEY);
+          const decryptedStr = bytes.toString(CryptoJS.enc.Utf8);
+          rawEntries = JSON.parse(decryptedStr);
+        } catch (e) {
+          rawEntries = [];
+        }
+      }
+      currentEntries = Array.isArray(rawEntries) ? rawEntries : [];
+    }
+
+    // Push the new interaction entry sent from frontend
+    currentEntries.push(req.body);
+    tracker.entries = currentEntries;
+
+    const updatedTracker = await tracker.save(); // Triggers pre-save encryption automatically
+
+    res.status(200).json({
+      status: "success",
+      data: {
+        ...updatedTracker.toObject(),
+        trackerName: updatedTracker.name,
+      },
+    });
+  } catch (err) {
+    console.error("Failed to add entry:", err);
+    res.status(400).json({ message: "Failed to add entry.", error: err.message });
+  }
+});
+
+// Update tracker details (Name, Color, Target, etc.)
 router.put("/:id", auth, async (req, res) => {
   try {
     const userId = getUserId(req);
@@ -133,7 +182,7 @@ router.put("/:id", auth, async (req, res) => {
   }
 });
 
-// Delete tracker (Matches: DELETE /api/v1/trackers/:id)
+// Delete tracker
 router.delete("/:id", auth, async (req, res) => {
   try {
     const userId = getUserId(req);
