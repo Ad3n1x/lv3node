@@ -1,10 +1,8 @@
 const mongoose = require("mongoose");
 const CryptoJS = require("crypto-js");
 
-// Use a secret key from your environment variables
 const SECRET_KEY = process.env.ENCRYPTION_KEY || "your_fallback_super_secret_key_32_bytes";
 
-// Helper encryption functions
 const encryptData = (text) => {
   if (text === null || text === undefined) return text;
   const stringValue = typeof text === "object" ? JSON.stringify(text) : String(text);
@@ -38,25 +36,27 @@ const trackerSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
-
-    // Encrypted strings
     name: { type: String, required: true },
-
-    // Clear text for database querying & routing
     type: { type: String, required: true },
     icon: { type: String, default: "Star" },
     color: { type: String, default: "#3b82f6" },
-
     target: { type: mongoose.Schema.Types.Mixed },
     unit: { type: String },
-
-    // Defined as String to hold the encrypted entries payload/ciphertext string
     entries: { type: String, default: "" },
   },
-  { timestamps: true },
+  { timestamps: true }
 );
 
-// --- 1. ENCRYPT BEFORE SAVING ---
+// --- HELPER TO DECRYPT DOCUMENTS ---
+const decryptDocument = (doc) => {
+  if (!doc) return;
+  // If doc is a Mongoose document, use .toObject() or direct assignment if mutable
+  if (doc.name) doc.name = decryptData(doc.name);
+  if (doc.target !== undefined) doc.target = decryptData(doc.target);
+  if (doc.entries) doc.entries = decryptData(doc.entries);
+};
+
+// --- 1. ENCRYPTION HOOKS ---
 trackerSchema.pre("save", function (next) {
   if (this.isModified("name") && !this.name.startsWith("U2FsdGVkX1")) {
     this.name = encryptData(this.name);
@@ -75,7 +75,6 @@ trackerSchema.pre("save", function (next) {
   next();
 });
 
-// --- 2. ENCRYPT BEFORE FIND ONE AND UPDATE ---
 trackerSchema.pre("findOneAndUpdate", function (next) {
   const update = this.getUpdate();
   if (!update) return next();
@@ -95,24 +94,23 @@ trackerSchema.pre("findOneAndUpdate", function (next) {
   next();
 });
 
-// --- 3. DECRYPT WHEN FETCHING DOCUMENTS ---
-trackerSchema.post(/^find|save|findOneAndUpdate/, function (docs) {
-  if (!docs) return;
+// --- 2. DECRYPTION HOOKS (Explicitly defined for safety) ---
+trackerSchema.post("save", function (doc) {
+  decryptDocument(doc);
+});
 
-  const decryptDocument = (doc) => {
-    if (!doc) return;
-    if (doc.name) doc.name = decryptData(doc.name);
-    if (doc.target !== undefined) doc.target = decryptData(doc.target);
-    if (doc.entries) doc.entries = decryptData(doc.entries);
-  };
+trackerSchema.post("findOne", function (doc) {
+  decryptDocument(doc);
+});
 
+trackerSchema.post("findOneAndUpdate", function (doc) {
+  decryptDocument(doc);
+});
+
+trackerSchema.post("find", function (docs) {
   if (Array.isArray(docs)) {
     docs.forEach(decryptDocument);
-  } else {
-    decryptDocument(docs);
   }
 });
 
-// Prevent OverwriteModelError on Render
-module.exports =
-  mongoose.models.Tracker || mongoose.model("Tracker", trackerSchema);
+module.exports = mongoose.models.Tracker || mongoose.model("Tracker", trackerSchema);
