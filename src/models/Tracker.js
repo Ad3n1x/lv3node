@@ -1,31 +1,64 @@
 const mongoose = require("mongoose");
 const CryptoJS = require("crypto-js");
 
-const SECRET_KEY = process.env.ENCRYPTION_KEY || "your_fallback_super_secret_key_32_bytes";
+const SECRET_KEY = process.env.ENCRYPTION_KEY;
 
-const encryptData = (text) => {
+if (!SECRET_KEY) {
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "ENCRYPTION_KEY environment variable is required in production. Refusing to start with an insecure fallback key."
+    );
+  }
+  console.warn(
+    "[Tracker model] WARNING: ENCRYPTION_KEY not set. Using an insecure dev-only fallback key. " +
+      "Data encrypted now will NOT be safe and should not be used outside local development."
+  );
+}
+const EFFECTIVE_KEY = SECRET_KEY || "dev_only_insecure_fallback_key_do_not_use_in_prod";
+
+const CIPHER_PREFIX = "U2FsdGVkX1";
+
+// --- Plain scalar text (never JSON-coerced back, e.g. "123" must stay "123") ---
+const encryptText = (text) => {
   if (text === null || text === undefined) return text;
-  const stringValue = typeof text === "object" ? JSON.stringify(text) : String(text);
-  return CryptoJS.AES.encrypt(stringValue, SECRET_KEY).toString();
+  return CryptoJS.AES.encrypt(String(text), EFFECTIVE_KEY).toString();
 };
 
-const decryptData = (ciphertext) => {
+const decryptText = (ciphertext) => {
   if (!ciphertext || typeof ciphertext !== "string") return ciphertext;
-  if (!ciphertext.startsWith("U2FsdGVkX1")) return ciphertext;
+  if (!ciphertext.startsWith(CIPHER_PREFIX)) return ciphertext;
+  try {
+    const bytes = CryptoJS.AES.decrypt(ciphertext, EFFECTIVE_KEY);
+    const decrypted = bytes.toString(CryptoJS.enc.Utf8);
+    return decrypted || ciphertext;
+  } catch {
+    return ciphertext;
+  }
+};
+
+// --- Structured values (target/entries) that may legitimately be objects/arrays/numbers ---
+const encryptValue = (value) => {
+  if (value === null || value === undefined) return value;
+  const stringValue = typeof value === "object" ? JSON.stringify(value) : String(value);
+  return CryptoJS.AES.encrypt(stringValue, EFFECTIVE_KEY).toString();
+};
+
+const decryptValue = (ciphertext) => {
+  if (!ciphertext || typeof ciphertext !== "string") return ciphertext;
+  if (!ciphertext.startsWith(CIPHER_PREFIX)) return ciphertext;
 
   try {
-    const bytes = CryptoJS.AES.decrypt(ciphertext, SECRET_KEY);
+    const bytes = CryptoJS.AES.decrypt(ciphertext, EFFECTIVE_KEY);
     const decryptedString = bytes.toString(CryptoJS.enc.Utf8);
-    
-    if (!decryptedString) return ciphertext; 
-    
+
+    if (!decryptedString) return ciphertext;
+
     try {
       return JSON.parse(decryptedString);
     } catch {
-      return !isNaN(decryptedString) && decryptedString !== "" ? Number(decryptedString) : decryptedString;
+      return decryptedString;
     }
   } catch {
-    // Silently return ciphertext if decryption fails (e.g., key mismatch)
     return ciphertext;
   }
 };
@@ -52,11 +85,11 @@ const trackerSchema = new mongoose.Schema(
 // --- HELPER TO DECRYPT DOCUMENTS ---
 const decryptDocument = (doc) => {
   if (!doc) return;
-  if (doc.name) doc.name = decryptData(doc.name);
-  if (doc.target !== undefined) doc.target = decryptData(doc.target);
-  
+  if (doc.name) doc.name = decryptText(doc.name);
+  if (doc.target !== undefined) doc.target = decryptValue(doc.target);
+
   if (doc.entries !== undefined) {
-    let decryptedEntries = decryptData(doc.entries);
+    let decryptedEntries = decryptValue(doc.entries);
     if (typeof decryptedEntries === "string" && decryptedEntries.trim() !== "") {
       try {
         decryptedEntries = JSON.parse(decryptedEntries);
@@ -68,46 +101,95 @@ const decryptDocument = (doc) => {
   }
 };
 
+// Encrypt a plain object of fields (used by save + all update paths)
+const encryptFieldsInPlace = (target) => {
+  if (!target) return;
+
+  if (target.name !== undefined && target.name !== null && !String(target.name).startsWith(CIPHER_PREFIX)) {
+    target.name = encryptText(target.name);
+  }
+
+  if (target.target !== undefined && target.target !== null) {
+    const alreadyEncrypted =
+      typeof target.target === "string" && target.target.startsWith(CIPHER_PREFIX);
+    if (!alreadyEncrypted) {
+      target.target = encryptValue(target.target);
+    }
+  }
+
+  if (target.entries !== undefined && target.entries !== null) {
+    const alreadyEncrypted =
+      typeof target.entries === "string" && target.entries.startsWith(CIPHER_PREFIX);
+    if (!alreadyEncrypted) {
+      target.entries = encryptValue(target.entries);
+    }
+  }
+};
+
 // --- 1. ENCRYPTION HOOKS ---
 trackerSchema.pre("save", function (next) {
-  if (this.name && !String(this.name).startsWith("U2FsdGVkX1")) {
-    this.name = encryptData(this.name);
+  encryptFieldsInPlace(this);
+  this.markModified("entries");
+  next();
+});
+
+trackerSchema.pre("findOneAndUpdate", async function (next) {
+  const update = this.getUpdate();
+  if (!update) return next();
+
+  // Pipeline-style updates (array form) aren't safe to auto-encrypt field-by-field.
+  if (Array.isArray(update)) {
+    console.warn(
+      "[Tracker model] Aggregation-pipeline update detected on findOneAndUpdate; " +
+        "automatic field encryption is skipped for this update. Encrypt fields manually."
+    );
+    return next();
   }
-  if (this.target !== undefined && this.target !== null) {
-    const targetStr = String(this.target);
-    if (!targetStr.startsWith("U2FsdGVkX1")) {
-      this.target = encryptData(this.target);
+
+  // Handle $push / $addToSet on entries: merge with existing decrypted entries,
+  // since entries is stored as a single encrypted blob, not a real array.
+  const pushEntry =
+    update.$push?.entries !== undefined
+      ? update.$push.entries
+      : update.$addToSet?.entries !== undefined
+      ? update.$addToSet.entries
+      : undefined;
+
+  if (pushEntry !== undefined) {
+    const existing = await this.model.findOne(this.getQuery()).lean();
+    let currentEntries = [];
+    if (existing && existing.entries !== undefined) {
+      const decrypted = decryptValue(existing.entries);
+      currentEntries = Array.isArray(decrypted) ? decrypted : [];
     }
+    const toAdd = update.$push?.entries?.$each || [pushEntry];
+    currentEntries = currentEntries.concat(toAdd);
+
+    update.$set = update.$set || {};
+    update.$set.entries = currentEntries;
+    delete update.$push?.entries;
+    delete update.$addToSet?.entries;
   }
-  if (this.entries !== undefined && this.entries !== null) {
-    const entriesStr = typeof this.entries === "object" ? JSON.stringify(this.entries) : String(this.entries);
-    if (!entriesStr.startsWith("U2FsdGVkX1")) {
-      this.entries = encryptData(entriesStr);
-      this.markModified("entries");
-    }
+
+  encryptFieldsInPlace(update.$set || update);
+  encryptFieldsInPlace(update.$setOnInsert);
+
+  next();
+});
+
+trackerSchema.pre("updateMany", function (next) {
+  const update = this.getUpdate();
+  if (update && !Array.isArray(update)) {
+    encryptFieldsInPlace(update.$set || update);
+    encryptFieldsInPlace(update.$setOnInsert);
   }
   next();
 });
 
-trackerSchema.pre("findOneAndUpdate", function (next) {
-  const update = this.getUpdate();
-  if (!update) return next();
-
-  const targetObj = update.$set || update;
-
-  if (targetObj.name && !String(targetObj.name).startsWith("U2FsdGVkX1")) {
-    targetObj.name = encryptData(targetObj.name);
+trackerSchema.pre("insertMany", function (next, docs) {
+  if (Array.isArray(docs)) {
+    docs.forEach((doc) => encryptFieldsInPlace(doc));
   }
-  if (targetObj.target !== undefined && !String(targetObj.target).startsWith("U2FsdGVkX1")) {
-    targetObj.target = encryptData(targetObj.target);
-  }
-  if (targetObj.entries !== undefined && targetObj.entries !== null) {
-    const entriesStr = typeof targetObj.entries === "object" ? JSON.stringify(targetObj.entries) : String(targetObj.entries);
-    if (!entriesStr.startsWith("U2FsdGVkX1")) {
-      targetObj.entries = encryptData(entriesStr);
-    }
-  }
-
   next();
 });
 
