@@ -1,3 +1,16 @@
+const app = express();
+
+app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// 🔍 ADD THIS GLOBAL LOGGER
+app.use((req, res, next) => {
+  console.log(`📥 INCOMING REQUEST: ${req.method} ${req.url} from ${req.headers.origin || 'unknown origin'}`);
+  next();
+});
+
+
 require("dotenv").config();
 const dns = require("dns");
 const express = require("express");
