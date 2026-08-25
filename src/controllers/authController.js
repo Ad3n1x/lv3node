@@ -1,13 +1,21 @@
-const User = require("../models/User");
-const bcrypt = require("bcrypt");
+const express = require("express");
+const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
 const { Resend } = require("resend");
+const User = require("../models/User");
+const verifyToken = require("../middleware/auth");
+const { sendPasswordResetEmail } = require("../config/mailer");
+
+const router = express.Router();
 
 // Initialize Resend with your environment variable safely
 const resend = new Resend(process.env.RESEND_API_KEY);
 
+// ==========================================
 // 1. REGISTER: Create user (unverified), generate OTP, and send email
-exports.register = async (req, res) => {
+// ==========================================
+router.post("/register", async (req, res) => {
   try {
     const { firstName, lastName, email, password } = req.body;
 
@@ -106,10 +114,12 @@ exports.register = async (req, res) => {
     console.error("Register Error:", error);
     return res.status(500).json({ message: error.message || "Server error during registration." });
   }
-};
+});
 
+// ==========================================
 // 2. VERIFY OTP: Check code, activate user, and return JWT token
-exports.verifyOtp = async (req, res) => {
+// ==========================================
+router.post("/verify-otp", async (req, res) => {
   try {
     const { email, otp } = req.body;
 
@@ -118,7 +128,7 @@ exports.verifyOtp = async (req, res) => {
     }
 
     const cleanEmail = email.trim().toLowerCase();
-    const user = await User.findOne({ email: cleanEmail });
+    const user = await User.findOne({ email: cleanEmail }).select("+password");
 
     if (!user) {
       return res.status(404).json({ message: "User not found." });
@@ -138,9 +148,9 @@ exports.verifyOtp = async (req, res) => {
     user.otpExpires = undefined;
     await user.save();
 
-    // Generate JWT Token
+    // Generate JWT Token (supports both userId and id conventions)
     const token = jwt.sign(
-      { userId: user._id, email: user.email },
+      { id: user._id, userId: user._id, email: user.email },
       process.env.JWT_SECRET || "fallback_secret",
       { expiresIn: "7d" }
     );
@@ -160,4 +170,115 @@ exports.verifyOtp = async (req, res) => {
     console.error("Verify OTP Error:", error);
     return res.status(500).json({ message: error.message || "Server error during OTP verification." });
   }
-};
+});
+
+// ==========================================
+// 3. LOGIN & PUBLIC KEY SYNC
+// ==========================================
+router.post("/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ message: "Please provide email and password." });
+
+    const cleanEmail = email.trim().toLowerCase();
+    const user = await User.findOne({ email: cleanEmail }).select("+password");
+
+    if (!user) return res.status(401).json({ message: "Invalid email or password." });
+    if (!user.isVerified) return res.status(403).json({ message: "Please verify your email with the OTP sent during registration." });
+
+    const isMatch = await bcrypt.compare(password.trim(), user.password);
+    if (!isMatch) return res.status(401).json({ message: "Invalid email or password." });
+
+    const token = jwt.sign(
+      { id: user._id, userId: user._id, email: user.email },
+      process.env.JWT_SECRET || "fallback_secret",
+      { expiresIn: "7d" }
+    );
+
+    return res.status(200).json({
+      status: "success",
+      token,
+      message: "Login successful!",
+      user: { id: user._id, firstName: user.firstName, lastName: user.lastName, email: user.email },
+    });
+  } catch (err) {
+    return res.status(500).json({ message: err.message || "Login failed." });
+  }
+});
+
+router.post("/public-key", verifyToken, async (req, res) => {
+  try {
+    const { publicKey } = req.body;
+    if (!publicKey) return res.status(400).json({ message: "Public key is required." });
+
+    const userId = req.user?.id || req.user?.userId;
+    await User.findByIdAndUpdate(userId, { publicKey });
+    return res.status(200).json({ message: "Public key saved successfully." });
+  } catch (err) {
+    return res.status(500).json({ message: err.message || "Failed to save public key." });
+  }
+});
+
+// ==========================================
+// 4. PASSWORD RECOVERY (FORGOT / RESET)
+// ==========================================
+router.post("/forgot-password", async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: "Email is required." });
+
+    const cleanEmail = email.trim().toLowerCase();
+    const user = await User.findOne({ email: cleanEmail });
+    
+    // Return 200 even if user doesn't exist for security (prevents user enumeration)
+    if (!user) return res.status(200).json({ message: "If that email exists, a reset link has been sent." });
+
+    const resetToken = crypto.randomBytes(32).toString("hex");
+    user.resetPasswordToken = crypto.createHash("sha256").update(resetToken).digest("hex");
+    user.resetPasswordExpires = Date.now() + 15 * 60 * 1000; // 15 minutes
+    await user.save();
+
+    const resetUrl = `https://your-frontend-app.com/reset-password?token=${resetToken}&email=${cleanEmail}`;
+    const emailResult = await sendPasswordResetEmail(user.email, resetUrl);
+    
+    if (!emailResult.success) {
+      return res.status(500).json({ error: "Failed to send reset email. Please try again later." });
+    }
+
+    res.status(200).json({ message: "Password reset link sent successfully." });
+  } catch (err) {
+    console.error("Forgot Password Error:", err);
+    res.status(500).json({ error: "Server error processing password reset." });
+  }
+});
+
+router.post("/reset-password", async (req, res) => {
+  try {
+    const { email, token, newPassword } = req.body;
+    if (!email || !token || !newPassword) return res.status(400).json({ error: "All fields are required." });
+
+    const cleanEmail = email.trim().toLowerCase();
+    const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
+    
+    const user = await User.findOne({
+      email: cleanEmail,
+      resetPasswordToken: hashedToken,
+      resetPasswordExpires: { $gt: Date.now() },
+    }).select("+password");
+
+    if (!user) return res.status(400).json({ error: "Invalid or expired password reset token." });
+
+    const salt = await bcrypt.genSalt(10);
+    user.password = await bcrypt.hash(newPassword.trim(), salt);
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpires = undefined;
+    await user.save();
+
+    res.status(200).json({ message: "Password updated successfully. You can now log in." });
+  } catch (err) {
+    console.error("Reset Password Error:", err);
+    res.status(500).json({ error: "Failed to reset password." });
+  }
+});
+
+module.exports = router;
