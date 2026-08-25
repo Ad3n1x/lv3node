@@ -93,17 +93,33 @@ router.put("/:id", auth, async (req, res) => {
       return res.status(400).json({ message: "Invalid tracker ID format." });
     }
 
-    const { _id, userId: bodyUserId, ...updateData } = req.body;
+    const tracker = await Tracker.findOne({ _id: id, userId });
 
-    const tracker = await Tracker.findOneAndUpdate(
-      { _id: id, userId },
-      updateData,
-      { new: true, runValidators: true }
-    );
+    if (!tracker) {
+      return res.status(404).json({ message: "Tracker not found or unauthorized." });
+    }
 
-    if (!tracker) return res.status(404).json({ message: "Tracker not found or unauthorized." });
-    res.json(tracker);
+    // Safely update fields if provided
+    if (req.body.name !== undefined) tracker.name = req.body.name;
+    if (req.body.type !== undefined) tracker.type = req.body.type;
+    if (req.body.icon !== undefined) tracker.icon = req.body.icon;
+    if (req.body.color !== undefined) tracker.color = req.body.color;
+    if (req.body.target !== undefined) tracker.target = req.body.target;
+    if (req.body.unit !== undefined) tracker.unit = req.body.unit;
+    if (req.body.entries !== undefined) tracker.entries = req.body.entries;
+
+    // .save() ensures Mongoose schema hooks, validation, and encryption run properly
+    const updatedTracker = await tracker.save();
+
+    res.status(200).json({
+      status: "success",
+      data: {
+        ...updatedTracker.toObject(),
+        trackerName: updatedTracker.name,
+      },
+    });
   } catch (err) {
+    console.error("Failed to update tracker:", err);
     res.status(400).json({ message: "Failed to update tracker.", error: err.message });
   }
 });
