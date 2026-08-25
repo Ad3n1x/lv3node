@@ -5,7 +5,7 @@ const auth = require("../middleware/auth");
 
 const router = express.Router();
 
-// Helper: Safely extracts user ID from any JWT payload structure
+// 🛡️ Helper: Safely extracts user ID from any JWT payload structure
 const getUserId = (req) => {
   if (!req.user) return null;
   return req.user.id || req.user._id || req.user.userId || (typeof req.user === "string" ? req.user : null);
@@ -18,7 +18,7 @@ router.get("/", auth, async (req, res) => {
     if (!userId) return res.status(401).json({ message: "Unauthorized: Invalid user session." });
 
     const trackers = await Tracker.find({ userId }).sort({ createdAt: -1 });
-    // res.json automatically invokes .toJSON() on all model instances
+    // res.json automatically invokes .toJSON() on all model instances, decrypting fields safely
     res.json(trackers);
   } catch (err) {
     res.status(500).json({ message: "Error retrieving trackers.", error: err.message });
@@ -92,7 +92,7 @@ router.post("/", auth, async (req, res) => {
   }
 });
 
-// Add an Entry to Tracker
+// Dedicated Endpoint to Add an Entry Permanently
 router.post("/:id/entries", auth, async (req, res) => {
   try {
     const userId = getUserId(req);
@@ -134,7 +134,7 @@ router.post("/:id/entries", auth, async (req, res) => {
   }
 });
 
-// Update tracker details
+// Update tracker details (with smart entries handler)
 router.put("/:id", auth, async (req, res) => {
   try {
     const userId = getUserId(req);
@@ -156,10 +156,21 @@ router.put("/:id", auth, async (req, res) => {
     if (req.body.color !== undefined) tracker.color = req.body.color;
     if (req.body.target !== undefined) tracker.target = req.body.target;
     if (req.body.unit !== undefined) tracker.unit = req.body.unit;
+
+    // --- SMART ENTRIES HANDLER ---
+    const trackerObj = tracker.toJSON();
+    let currentEntries = Array.isArray(trackerObj.entries) ? trackerObj.entries : [];
+
     if (req.body.entries !== undefined) {
-      tracker.entries = req.body.entries;
-      tracker.markModified("entries");
+      currentEntries = Array.isArray(req.body.entries) ? req.body.entries : [req.body.entries];
+    } else if (req.body.entry !== undefined) {
+      currentEntries.push(req.body.entry);
+    } else if (req.body.date || req.body.status || req.body.value !== undefined) {
+      currentEntries.push(req.body);
     }
+
+    tracker.entries = currentEntries;
+    tracker.markModified("entries");
 
     const updatedTracker = await tracker.save();
     const updatedObj = updatedTracker.toJSON();
@@ -173,7 +184,7 @@ router.put("/:id", auth, async (req, res) => {
     });
   } catch (err) {
     console.error("Failed to update tracker:", err);
-    res.status(400).json({ message: "Failed to update tracker.", error: err.message });
+    res.status(500).json({ message: "Failed to update tracker.", error: err.message });
   }
 });
 
@@ -192,6 +203,7 @@ router.delete("/:id", auth, async (req, res) => {
 
     res.json({ message: "Tracker deleted successfully.", id });
   } catch (err) {
+    console.error("Failed to delete tracker:", err);
     res.status(500).json({ message: "Failed to delete tracker.", error: err.message });
   }
 });
