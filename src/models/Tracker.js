@@ -11,20 +11,13 @@ const encryptData = (data) => {
 
 const decryptData = (ciphertext) => {
   if (!ciphertext || typeof ciphertext !== "string") return ciphertext;
-  
-  // If it doesn't look like crypto-js ciphertext, return it as-is
-  if (!ciphertext.startsWith("U2FsdGVkX1")) {
-    return ciphertext;
-  }
+  if (!ciphertext.startsWith("U2FsdGVkX1")) return ciphertext;
 
   try {
     const bytes = CryptoJS.AES.decrypt(ciphertext, SECRET_KEY);
     const decryptedString = bytes.toString(CryptoJS.enc.Utf8);
     
-    if (!decryptedString) {
-      console.warn("⚠️ Decryption resulted in empty UTF-8 string (Possible key mismatch). Returning raw text.");
-      return ciphertext; 
-    }
+    if (!decryptedString) return ciphertext;
     
     try {
       return JSON.parse(decryptedString);
@@ -32,8 +25,7 @@ const decryptData = (ciphertext) => {
       return !isNaN(decryptedString) && decryptedString !== "" ? Number(decryptedString) : decryptedString;
     }
   } catch (error) {
-    console.warn("⚠️ Decryption failed safely (Key mismatch or invalid ciphertext):", error.message);
-    return ciphertext; // Fall back to returning raw ciphertext instead of crashing
+    return ciphertext;
   }
 };
 
@@ -56,36 +48,44 @@ const trackerSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-const decryptDocument = (doc) => {
-  if (!doc) return;
-  const d = typeof doc.toObject === "function" ? doc.toObject() : doc;
-
-  if (d.name) {
-    doc.name = decryptData(d.name);
-  }
-  if (d.target !== undefined) {
-    doc.target = decryptData(d.target);
-  }
-  
-  if (d.entries !== undefined) {
-    let decrypted = decryptData(d.entries);
-    if (typeof decrypted === "string" && decrypted.startsWith("U2FsdGVkX1")) {
-      // Secondary safety check if double-encrypted
-      decrypted = decryptData(decrypted);
-    }
-    if (typeof decrypted === "string") {
+// --- AUTOMATIC DECRYPTION ON JSON OUTPUT (Used by Express res.json()) ---
+trackerSchema.set("toJSON", {
+  transform: function (doc, ret) {
+    ret.name = decryptData(ret.name);
+    ret.target = decryptData(ret.target);
+    
+    let decryptedEntries = decryptData(ret.entries);
+    if (typeof decryptedEntries === "string") {
       try {
-        decrypted = JSON.parse(decrypted);
+        decryptedEntries = JSON.parse(decryptedEntries);
       } catch {
-        decrypted = [];
+        decryptedEntries = [];
       }
     }
-    doc.entries = Array.isArray(decrypted) ? decrypted : [];
-  } else {
-    doc.entries = [];
-  }
-};
+    ret.entries = Array.isArray(decryptedEntries) ? decryptedEntries : [];
+    return ret;
+  },
+});
 
+trackerSchema.set("toObject", {
+  transform: function (doc, ret) {
+    ret.name = decryptData(ret.name);
+    ret.target = decryptData(ret.target);
+    
+    let decryptedEntries = decryptData(ret.entries);
+    if (typeof decryptedEntries === "string") {
+      try {
+        decryptedEntries = JSON.parse(decryptedEntries);
+      } catch {
+        decryptedEntries = [];
+      }
+    }
+    ret.entries = Array.isArray(decryptedEntries) ? decryptedEntries : [];
+    return ret;
+  },
+});
+
+// --- ENCRYPTION BEFORE SAVING / UPDATING ---
 trackerSchema.pre("save", function (next) {
   if (this.isModified("name") && this.name && !String(this.name).startsWith("U2FsdGVkX1")) {
     this.name = encryptData(this.name);
@@ -121,15 +121,6 @@ trackerSchema.pre("findOneAndUpdate", function (next) {
   }
 
   next();
-});
-
-trackerSchema.post("save", function (doc) { decryptDocument(doc); });
-trackerSchema.post("findOne", function (doc) { decryptDocument(doc); });
-trackerSchema.post("findOneAndUpdate", function (doc) { decryptDocument(doc); });
-trackerSchema.post("find", function (docs) {
-  if (Array.isArray(docs)) {
-    docs.forEach(decryptDocument);
-  }
 });
 
 module.exports = mongoose.models.Tracker || mongoose.model("Tracker", trackerSchema);
