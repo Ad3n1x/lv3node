@@ -6,9 +6,10 @@ const cors = require("cors");
 const cron = require("node-cron");
 const webpush = require("web-push");
 
+const User = require("./models/User"); // 👈 Required for updating public keys
 const authRoutes = require("./routes/auth.routes");
 const trackerRoutes = require("./routes/trackerRoutes");
-const verifyToken = require("./middleware/authMiddleware"); // Adjust this path if your auth middleware is located elsewhere
+const verifyToken = require("./middleware/auth");
 
 if (
   process.env.MONGODB_URI &&
@@ -58,6 +59,18 @@ app.get("/health", (req, res) => res.status(200).send("OK"));
 // API Routes
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/trackers", trackerRoutes);
+
+// ✨ Endpoint to save or update the authenticated user's E2EE public key
+app.post("/api/v1/users/public-key", verifyToken, async (req, res) => {
+  try {
+    const { publicKey } = req.body;
+    await User.findByIdAndUpdate(req.user.id, { publicKey });
+    res.status(200).json({ message: "Public key synchronized successfully" });
+  } catch (err) {
+    console.error("Failed to save public key:", err);
+    res.status(500).json({ error: "Failed to save public key" });
+  }
+});
 
 // ✨ Endpoint to save browser push subscription
 app.post("/api/v1/subscribe", verifyToken, async (req, res) => {
