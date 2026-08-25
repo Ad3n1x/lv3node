@@ -10,13 +10,19 @@ const encryptData = (data) => {
 };
 
 const decryptData = (ciphertext) => {
-  if (!ciphertext) return ciphertext;
+  if (!ciphertext || typeof ciphertext !== "string") return ciphertext;
+  
+  // If it doesn't look like crypto-js ciphertext, return it as-is
+  if (!ciphertext.startsWith("U2FsdGVkX1")) {
+    return ciphertext;
+  }
+
   try {
     const bytes = CryptoJS.AES.decrypt(ciphertext, SECRET_KEY);
     const decryptedString = bytes.toString(CryptoJS.enc.Utf8);
     
     if (!decryptedString) {
-      console.warn("⚠️ Decryption resulted in an empty string. Key mismatch?");
+      console.warn("⚠️ Decryption resulted in empty UTF-8 string (Possible key mismatch). Returning raw text.");
       return ciphertext; 
     }
     
@@ -26,8 +32,8 @@ const decryptData = (ciphertext) => {
       return !isNaN(decryptedString) && decryptedString !== "" ? Number(decryptedString) : decryptedString;
     }
   } catch (error) {
-    console.error("❌ Decryption error (Check ENCRYPTION_KEY):", error.message);
-    return ciphertext;
+    console.warn("⚠️ Decryption failed safely (Key mismatch or invalid ciphertext):", error.message);
+    return ciphertext; // Fall back to returning raw ciphertext instead of crashing
   }
 };
 
@@ -54,17 +60,18 @@ const decryptDocument = (doc) => {
   if (!doc) return;
   const d = typeof doc.toObject === "function" ? doc.toObject() : doc;
 
-  if (d.name && typeof d.name === "string" && d.name.startsWith("U2FsdGVkX1")) {
+  if (d.name) {
     doc.name = decryptData(d.name);
   }
-  if (d.target !== undefined && typeof d.target === "string" && d.target.startsWith("U2FsdGVkX1")) {
+  if (d.target !== undefined) {
     doc.target = decryptData(d.target);
   }
   
   if (d.entries !== undefined) {
-    let decrypted = d.entries;
-    if (typeof d.entries === "string" && d.entries.startsWith("U2FsdGVkX1")) {
-      decrypted = decryptData(d.entries);
+    let decrypted = decryptData(d.entries);
+    if (typeof decrypted === "string" && decrypted.startsWith("U2FsdGVkX1")) {
+      // Secondary safety check if double-encrypted
+      decrypted = decryptData(decrypted);
     }
     if (typeof decrypted === "string") {
       try {
@@ -80,14 +87,17 @@ const decryptDocument = (doc) => {
 };
 
 trackerSchema.pre("save", function (next) {
-  if (this.isModified("name") && this.name) {
+  if (this.isModified("name") && this.name && !String(this.name).startsWith("U2FsdGVkX1")) {
     this.name = encryptData(this.name);
   }
-  if (this.isModified("target") && this.target !== undefined) {
+  if (this.isModified("target") && this.target !== undefined && !String(this.target).startsWith("U2FsdGVkX1")) {
     this.target = encryptData(this.target);
   }
   if (this.isModified("entries") && this.entries !== undefined) {
-    this.entries = encryptData(this.entries);
+    const entriesStr = typeof this.entries === "object" ? JSON.stringify(this.entries) : String(this.entries);
+    if (!entriesStr.startsWith("U2FsdGVkX1")) {
+      this.entries = encryptData(entriesStr);
+    }
   }
   next();
 });
@@ -97,9 +107,18 @@ trackerSchema.pre("findOneAndUpdate", function (next) {
   if (!update) return next();
   const targetObj = update.$set || update;
 
-  if (targetObj.name) targetObj.name = encryptData(targetObj.name);
-  if (targetObj.target !== undefined) targetObj.target = encryptData(targetObj.target);
-  if (targetObj.entries !== undefined) targetObj.entries = encryptData(targetObj.entries);
+  if (targetObj.name && !String(targetObj.name).startsWith("U2FsdGVkX1")) {
+    targetObj.name = encryptData(targetObj.name);
+  }
+  if (targetObj.target !== undefined && !String(targetObj.target).startsWith("U2FsdGVkX1")) {
+    targetObj.target = encryptData(targetObj.target);
+  }
+  if (targetObj.entries !== undefined) {
+    const entriesStr = typeof targetObj.entries === "object" ? JSON.stringify(targetObj.entries) : String(targetObj.entries);
+    if (!entriesStr.startsWith("U2FsdGVkX1")) {
+      targetObj.entries = encryptData(entriesStr);
+    }
+  }
 
   next();
 });
