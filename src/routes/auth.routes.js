@@ -3,11 +3,11 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { Resend } = require("resend");
 const User = require("../models/User");
-const verifyToken = require("../middleware/auth"); // 👈 Ensure you import your auth middleware
+const verifyToken = require("../middleware/auth");
 
 const router = express.Router();
 
-// Initialize Resend with your environment variable (Secure!)
+// Initialize Resend safely
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 // POST /api/v1/auth/register (Step 1: Save unverified user & send OTP)
@@ -52,54 +52,49 @@ router.post("/register", async (req, res) => {
       });
     }
 
-    // Send the OTP via Resend using your custom template
-    await resend.emails.send({
-      from: 'Tracker App <onboarding@resend.dev>',
-      to: [cleanEmail],
-      subject: '🔐 Your Verification Code — Tracker App',
-      html: `
-        <div style="background-color: #f8f9fa; padding: 40px 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;">
-          <div style="max-width: 480px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.05); border: 1px solid #e9ecef;">
-            
-            <!-- Header -->
-            <div style="background: linear-gradient(135deg, #0d6efd 0%, #0a58ca 100%); padding: 30px; text-align: center; color: #ffffff;">
-              <h1 style="margin: 0; font-size: 24px; font-weight: 700; letter-spacing: 0.5px;">Tracker App</h1>
-              <p style="margin: 8px 0 0 0; font-size: 14px; opacity: 0.9;">Secure Account Verification</p>
-            </div>
-
-            <!-- Body -->
-            <div style="padding: 35px 30px; text-align: left; color: #495057;">
-              <p style="margin-top: 0; font-size: 16px; font-weight: 500;">Hello <strong>${firstName}</strong>,</p>
-              <p style="font-size: 15px; line-height: 1.5; color: #6c757d;">
-                Thank you for signing up! Use the secure verification code below to activate your account. This code is valid for <strong>10 minutes</strong>.
-              </p>
-
-              <!-- OTP Box Badge -->
-              <div style="margin: 30px 0; text-align: center;">
-                <div style="display: inline-block; background-color: #f1f3f5; border: 2px dashed #ced4da; border-radius: 8px; padding: 15px 30px; font-size: 32px; font-weight: 800; letter-spacing: 6px; color: #0d6efd;">
-                  ${otp}
-                </div>
+    // Check if Resend API key is configured before sending email
+    if (!process.env.RESEND_API_KEY) {
+      console.warn("⚠️ Warning: RESEND_API_KEY is missing. OTP email could not be sent.");
+    } else {
+      await resend.emails.send({
+        from: 'Tracker App <onboarding@resend.dev>',
+        to: [cleanEmail],
+        subject: '🔐 Your Verification Code — Tracker App',
+        html: `
+          <div style="background-color: #f8f9fa; padding: 40px 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;">
+            <div style="max-width: 480px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.05); border: 1px solid #e9ecef;">
+              <div style="background: linear-gradient(135deg, #0d6efd 0%, #0a58ca 100%); padding: 30px; text-align: center; color: #ffffff;">
+                <h1 style="margin: 0; font-size: 24px; font-weight: 700; letter-spacing: 0.5px;">Tracker App</h1>
+                <p style="margin: 8px 0 0 0; font-size: 14px; opacity: 0.9;">Secure Account Verification</p>
               </div>
-
-              <p style="font-size: 13px; color: #adb5bd; line-height: 1.4; margin-bottom: 0;">
-                If you didn't request this code, you can safely ignore this email. Someone else might have typed your email address by mistake.
-              </p>
+              <div style="padding: 35px 30px; text-align: left; color: #495057;">
+                <p style="margin-top: 0; font-size: 16px; font-weight: 500;">Hello <strong>${firstName}</strong>,</p>
+                <p style="font-size: 15px; line-height: 1.5; color: #6c757d;">
+                  Thank you for signing up! Use the secure verification code below to activate your account. This code is valid for <strong>10 minutes</strong>.
+                </p>
+                <div style="margin: 30px 0; text-align: center;">
+                  <div style="display: inline-block; background-color: #f1f3f5; border: 2px dashed #ced4da; border-radius: 8px; padding: 15px 30px; font-size: 32px; font-weight: 800; letter-spacing: 6px; color: #0d6efd;">
+                    ${otp}
+                  </div>
+                </div>
+                <p style="font-size: 13px; color: #adb5bd; line-height: 1.4; margin-bottom: 0;">
+                  If you didn't request this code, you can safely ignore this email.
+                </p>
+              </div>
+              <div style="background-color: #f8f9fa; padding: 15px 30px; text-align: center; font-size: 12px; color: #adb5bd; border-top: 1px solid #e9ecef;">
+                &copy; ${new Date().getFullYear()} Tracker App. All rights reserved.
+              </div>
             </div>
-
-            <!-- Footer -->
-            <div style="background-color: #f8f9fa; padding: 15px 30px; text-align: center; font-size: 12px; color: #adb5bd; border-top: 1px solid #e9ecef;">
-              &copy; ${new Date().getFullYear()} Tracker App. All rights reserved.
-            </div>
-
           </div>
-        </div>
-      `,
-    });
+        `,
+      });
+    }
 
     return res.status(200).json({
       message: "Registration successful! Please check your email for the OTP.",
     });
   } catch (err) {
+    console.error("❌ Registration Error:", err); // 👈 This will now print the exact error to Render logs
     return res.status(500).json({ message: err.message || "Registration failed." });
   }
 });
@@ -145,6 +140,7 @@ router.post("/verify-otp", async (req, res) => {
       user: { id: user._id, firstName: user.firstName, lastName: user.lastName, email: user.email },
     });
   } catch (err) {
+    console.error("❌ Verify OTP Error:", err);
     return res.status(500).json({ message: err.message || "OTP verification failed." });
   }
 });
@@ -163,7 +159,6 @@ router.post("/login", async (req, res) => {
 
     const user = await User.findOne({ email: cleanEmail });
     if (!user) {
-      // 👈 Fixed the typo here from `res.path ? null : res.status(401)...`
       return res.status(401).json({ message: "Invalid email or password." });
     }
 
@@ -188,11 +183,12 @@ router.post("/login", async (req, res) => {
       user: { id: user._id, firstName: user.firstName, lastName: user.lastName, email: user.email },
     });
   } catch (err) {
+    console.error("❌ Login Error:", err);
     return res.status(500).json({ message: err.message || "Login failed." });
   }
 });
 
-// POST /api/v1/auth/public-key (👈 NEW: Syncs the client's E2EE public key)
+// POST /api/v1/auth/public-key
 router.post("/public-key", verifyToken, async (req, res) => {
   try {
     const { publicKey } = req.body;
@@ -203,6 +199,7 @@ router.post("/public-key", verifyToken, async (req, res) => {
     await User.findByIdAndUpdate(req.user.id, { publicKey });
     return res.status(200).json({ message: "Public key saved successfully." });
   } catch (err) {
+    console.error("❌ Public Key Error:", err);
     return res.status(500).json({ message: err.message || "Failed to save public key." });
   }
 });

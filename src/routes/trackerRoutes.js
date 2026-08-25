@@ -5,14 +5,17 @@ const auth = require("../middleware/auth");
 
 const router = express.Router();
 
-// Helper to safely extract user ID regardless of JWT payload format
-const getUserId = (req) => req.user?.id || req.user?._id;
+// 🛡️ Enhanced Helper: Safely extracts user ID from any JWT payload structure (id, _id, or userId)
+const getUserId = (req) => {
+  if (!req.user) return null;
+  return req.user.id || req.user._id || req.user.userId || (typeof req.user === "string" ? req.user : null);
+};
 
 // Get all trackers for logged-in user (Matches: GET /api/v1/trackers)
 router.get("/", auth, async (req, res) => {
   try {
     const userId = getUserId(req);
-    if (!userId) return res.status(401).json({ message: "Unauthorized user session." });
+    if (!userId) return res.status(401).json({ message: "Unauthorized: Invalid user session." });
 
     const trackers = await Tracker.find({ userId }).sort({ createdAt: -1 });
     res.json(trackers);
@@ -56,12 +59,20 @@ router.get("/:id", auth, async (req, res) => {
 router.post("/", auth, async (req, res) => {
   try {
     const userId = getUserId(req);
-    if (!userId) return res.status(401).json({ message: "Unauthorized user session." });
+    if (!userId) {
+      return res.status(401).json({ 
+        message: "Unauthorized: User ID could not be extracted from token." 
+      });
+    }
 
-    const { name, type, icon, color, target, unit, entries } = req.body;
+    // Ensure req.body exists to prevent destructuring crashes
+    const { name, type, icon, color, target, unit, entries } = req.body || {};
 
     if (!name || !type) {
-      return res.status(400).json({ message: "Name and type are required fields." });
+      return res.status(400).json({ 
+        message: "Validation Error: 'name' and 'type' are required fields in the request body.",
+        receivedBody: req.body 
+      });
     }
 
     const tracker = new Tracker({
@@ -76,10 +87,10 @@ router.post("/", auth, async (req, res) => {
     });
 
     const savedTracker = await tracker.save();
-    res.status(201).json(savedTracker);
+    return res.status(201).json(savedTracker);
   } catch (err) {
     console.error("Tracker creation error:", err.message);
-    res.status(400).json({ message: "Failed to create tracker.", error: err.message });
+    return res.status(400).json({ message: "Failed to create tracker.", error: err.message });
   }
 });
 
