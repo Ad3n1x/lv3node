@@ -6,6 +6,10 @@ const SECRET_KEY = process.env.ENCRYPTION_KEY || "your_fallback_super_secret_key
 const encryptData = (text) => {
   if (text === null || text === undefined) return text;
   const stringValue = typeof text === "object" ? JSON.stringify(text) : String(text);
+  
+  // Prevent double-encryption if it's already a ciphertext
+  if (stringValue.startsWith("U2FsdGVkX1")) return stringValue;
+
   return CryptoJS.AES.encrypt(stringValue, SECRET_KEY).toString();
 };
 
@@ -68,7 +72,7 @@ const decryptDocObject = (doc) => {
   return doc;
 };
 
-// --- SAFE TRANSFORM FOR JSON SERIALIZATION (Prevents hanging hooks) ---
+// --- SAFE TRANSFORM FOR JSON SERIALIZATION ---
 const transformJson = function (doc, ret) {
   return decryptDocObject(ret);
 };
@@ -78,21 +82,16 @@ trackerSchema.set("toObject", { transform: transformJson });
 
 // --- ENCRYPTION BEFORE SAVING ---
 trackerSchema.pre("save", function (next) {
-  if (this.name && !String(this.name).startsWith("U2FsdGVkX1")) {
+  if (this.name) {
     this.name = encryptData(this.name);
   }
   if (this.target !== undefined && this.target !== null) {
-    const targetStr = String(this.target);
-    if (!targetStr.startsWith("U2FsdGVkX1")) {
-      this.target = encryptData(this.target);
-    }
+    this.target = encryptData(this.target);
   }
   if (this.entries !== undefined && this.entries !== null) {
     const entriesStr = typeof this.entries === "object" ? JSON.stringify(this.entries) : String(this.entries);
-    if (!entriesStr.startsWith("U2FsdGVkX1")) {
-      this.entries = encryptData(entriesStr);
-      this.markModified("entries");
-    }
+    this.entries = encryptData(entriesStr);
+    this.markModified("entries");
   }
   next();
 });
@@ -103,17 +102,15 @@ trackerSchema.pre("findOneAndUpdate", function (next) {
 
   const targetObj = update.$set || update;
 
-  if (targetObj.name && !String(targetObj.name).startsWith("U2FsdGVkX1")) {
+  if (targetObj.name) {
     targetObj.name = encryptData(targetObj.name);
   }
-  if (targetObj.target !== undefined && !String(targetObj.target).startsWith("U2FsdGVkX1")) {
+  if (targetObj.target !== undefined) {
     targetObj.target = encryptData(targetObj.target);
   }
   if (targetObj.entries !== undefined && targetObj.entries !== null) {
     const entriesStr = typeof targetObj.entries === "object" ? JSON.stringify(targetObj.entries) : String(targetObj.entries);
-    if (!entriesStr.startsWith("U2FsdGVkX1")) {
-      targetObj.entries = encryptData(entriesStr);
-    }
+    targetObj.entries = encryptData(entriesStr);
   }
 
   next();

@@ -4,7 +4,7 @@ const getTrackerEntries = async (req, res) => {
   try {
     const { trackerId } = req.params;
 
-    // Safely extract the user ID regardless of how auth middleware attaches it
+    // Safely extract the user ID regardless of auth middleware structure
     const userId = req.user?._id || req.user?.id || req.user?.userId || req.user;
 
     if (!userId) {
@@ -20,18 +20,18 @@ const getTrackerEntries = async (req, res) => {
       return res.status(404).json({ message: "Tracker not found." });
     }
 
-    // Convert to plain object and ensure decryption handles safely
-    const trackerObj = tracker.toObject();
+    // toJSON() explicitly invokes schema getters and custom JSON transforms
+    const trackerObj = tracker.toJSON();
 
-    // Returns the tracker details along with its decrypted fields
     return res.status(200).json({
       status: "success",
       data: {
         ...trackerObj, 
-        trackerName: trackerObj.name,
+        name: trackerObj.name,
+        trackerName: trackerObj.name, // Maintained for backwards compatibility
         unit: trackerObj.unit,
         target: trackerObj.target,
-        entries: trackerObj.entries, 
+        entries: Array.isArray(trackerObj.entries) ? trackerObj.entries : [], 
       },
     });
   } catch (error) {
