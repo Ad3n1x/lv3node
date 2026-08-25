@@ -3,6 +3,7 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { Resend } = require("resend");
 const User = require("../models/User");
+const verifyToken = require("../middleware/auth"); // 👈 Ensure you import your auth middleware
 
 const router = express.Router();
 
@@ -162,7 +163,8 @@ router.post("/login", async (req, res) => {
 
     const user = await User.findOne({ email: cleanEmail });
     if (!user) {
-      return res.path ? null : res.status(401).json({ message: "Invalid email or password." });
+      // 👈 Fixed the typo here from `res.path ? null : res.status(401)...`
+      return res.status(401).json({ message: "Invalid email or password." });
     }
 
     if (!user.isVerified) {
@@ -187,6 +189,21 @@ router.post("/login", async (req, res) => {
     });
   } catch (err) {
     return res.status(500).json({ message: err.message || "Login failed." });
+  }
+});
+
+// POST /api/v1/auth/public-key (👈 NEW: Syncs the client's E2EE public key)
+router.post("/public-key", verifyToken, async (req, res) => {
+  try {
+    const { publicKey } = req.body;
+    if (!publicKey) {
+      return res.status(400).json({ message: "Public key is required." });
+    }
+
+    await User.findByIdAndUpdate(req.user.id, { publicKey });
+    return res.status(200).json({ message: "Public key saved successfully." });
+  } catch (err) {
+    return res.status(500).json({ message: err.message || "Failed to save public key." });
   }
 });
 
