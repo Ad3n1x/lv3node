@@ -6,9 +6,9 @@ const cors = require("cors");
 const cron = require("node-cron");
 const webpush = require("web-push");
 
-const User = require("./models/User"); // 👈 Required for updating public keys
-const authRoutes = require("./routes/auth.routes");
-const trackerRoutes = require("./routes/trackerRoutes");
+const User = require("./models/User"); 
+const authRoutes = require("./src/routes/auth"); // 👈 Fixed relative path to match your folder structure
+const trackerRoutes = require("./src/routes/trackerRoutes");
 const verifyToken = require("./middleware/auth");
 
 if (
@@ -38,12 +38,12 @@ webpush.setVapidDetails(
   privateVapidKey
 );
 
-// ✨ Push Subscription Schema & Model
+// ✨ Push Subscription Schema & Model (Safe against OverwriteModelError)
 const subscriptionSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   subscription: Object,
 });
-const PushSubscription = mongoose.model("PushSubscription", subscriptionSchema);
+const PushSubscription = mongoose.models.PushSubscription || mongoose.model("PushSubscription", subscriptionSchema);
 
 // Base & Health Routes
 app.get("/", (req, res) => {
