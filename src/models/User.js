@@ -29,4 +29,3 @@ const trackerSchema = new mongoose.Schema(
 // Prevent OverwriteModelError on Render
 module.exports =
   mongoose.models.Tracker || mongoose.model("Tracker", trackerSchema);
-const mongoose = require("mongoose");
