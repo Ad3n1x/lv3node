@@ -3,10 +3,9 @@ const CryptoJS = require("crypto-js");
 
 const SECRET_KEY = process.env.ENCRYPTION_KEY || "your_fallback_super_secret_key_32_bytes";
 
-const encryptData = (data) => {
-  if (data === null || data === undefined) return data;
-  // If it's an object or array, convert to JSON string first
-  const stringValue = typeof data === "object" ? JSON.stringify(data) : String(data);
+const encryptData = (text) => {
+  if (text === null || text === undefined) return text;
+  const stringValue = typeof text === "object" ? JSON.stringify(text) : String(text);
   return CryptoJS.AES.encrypt(stringValue, SECRET_KEY).toString();
 };
 
@@ -43,53 +42,35 @@ const trackerSchema = new mongoose.Schema(
     color: { type: String, default: "#3b82f6" },
     target: { type: mongoose.Schema.Types.Mixed },
     unit: { type: String },
-    entries: { type: mongoose.Schema.Types.Mixed, default: [] },
+    entries: { type: String, default: "" },
   },
   { timestamps: true }
 );
 
-// --- HELPER TO DECRYPT & PARSE DOCUMENTS ---
+// --- HELPER TO DECRYPT DOCUMENTS ---
 const decryptDocument = (doc) => {
   if (!doc) return;
-  // Convert mongoose doc to plain object if needed
-  const d = typeof doc.toObject === "function" ? doc.toObject() : doc;
-
-  if (d.name && typeof d.name === "string" && d.name.startsWith("U2FsdGVkX1")) {
-    doc.name = decryptData(d.name);
-  }
-  if (d.target !== undefined && typeof d.target === "string" && d.target.startsWith("U2FsdGVkX1")) {
-    doc.target = decryptData(d.target);
-  }
-  
-  if (d.entries !== undefined) {
-    let decrypted = d.entries;
-    if (typeof d.entries === "string" && d.entries.startsWith("U2FsdGVkX1")) {
-      decrypted = decryptData(d.entries);
-    }
-    // If it parsed into a JSON string or array, ensure it's a clean array for the frontend
-    if (typeof decrypted === "string") {
-      try {
-        decrypted = JSON.parse(decrypted);
-      } catch {
-        decrypted = [];
-      }
-    }
-    doc.entries = Array.isArray(decrypted) ? decrypted : [];
-  } else {
-    doc.entries = [];
-  }
+  // If doc is a Mongoose document, use .toObject() or direct assignment if mutable
+  if (doc.name) doc.name = decryptData(doc.name);
+  if (doc.target !== undefined) doc.target = decryptData(doc.target);
+  if (doc.entries) doc.entries = decryptData(doc.entries);
 };
 
-// --- ENCRYPTION PRE-HOOKS ---
+// --- 1. ENCRYPTION HOOKS ---
 trackerSchema.pre("save", function (next) {
-  if (this.isModified("name") && this.name) {
+  if (this.isModified("name") && !this.name.startsWith("U2FsdGVkX1")) {
     this.name = encryptData(this.name);
   }
   if (this.isModified("target") && this.target !== undefined) {
-    this.target = encryptData(this.target);
+    const targetStr = String(this.target);
+    if (!targetStr.startsWith("U2FsdGVkX1")) {
+      this.target = encryptData(this.target);
+    }
   }
-  if (this.isModified("entries") && this.entries !== undefined) {
-    this.entries = encryptData(this.entries);
+  if (this.isModified("entries") && this.entries) {
+    if (!this.entries.startsWith("U2FsdGVkX1")) {
+      this.entries = encryptData(this.entries);
+    }
   }
   next();
 });
@@ -100,23 +81,32 @@ trackerSchema.pre("findOneAndUpdate", function (next) {
 
   const targetObj = update.$set || update;
 
-  if (targetObj.name) {
+  if (targetObj.name && !String(targetObj.name).startsWith("U2FsdGVkX1")) {
     targetObj.name = encryptData(targetObj.name);
   }
-  if (targetObj.target !== undefined) {
+  if (targetObj.target !== undefined && !String(targetObj.target).startsWith("U2FsdGVkX1")) {
     targetObj.target = encryptData(targetObj.target);
   }
-  if (targetObj.entries !== undefined) {
+  if (targetObj.entries && !String(targetObj.entries).startsWith("U2FsdGVkX1")) {
     targetObj.entries = encryptData(targetObj.entries);
   }
 
   next();
 });
 
-// --- DECRYPTION POST-HOOKS ---
-trackerSchema.post("save", function (doc) { decryptDocument(doc); });
-trackerSchema.post("findOne", function (doc) { decryptDocument(doc); });
-trackerSchema.post("findOneAndUpdate", function (doc) { decryptDocument(doc); });
+// --- 2. DECRYPTION HOOKS (Explicitly defined for safety) ---
+trackerSchema.post("save", function (doc) {
+  decryptDocument(doc);
+});
+
+trackerSchema.post("findOne", function (doc) {
+  decryptDocument(doc);
+});
+
+trackerSchema.post("findOneAndUpdate", function (doc) {
+  decryptDocument(doc);
+});
+
 trackerSchema.post("find", function (docs) {
   if (Array.isArray(docs)) {
     docs.forEach(decryptDocument);
