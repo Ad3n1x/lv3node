@@ -1,7 +1,7 @@
 const express = require("express");
 const mongoose = require("mongoose");
-const Tracker = require("../models/Tracker");
-const auth = require("../middleware/auth");
+const Tracker = require("./models/Tracker");
+const auth = require("./middleware/auth");
 
 const router = express.Router();
 
