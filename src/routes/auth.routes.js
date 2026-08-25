@@ -13,7 +13,10 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 // POST /api/v1/auth/register (Step 1: Save unverified user & send OTP)
 router.post("/register", async (req, res) => {
   try {
-    const { firstName, lastName, email, password } = req.body;
+    // Accept both camelCase and frontend form values (firstname/lastname)
+    const firstName = req.body.firstName || req.body.firstname;
+    const lastName = req.body.lastName || req.body.lastname;
+    const { email, password } = req.body;
 
     if (!email || !password || !firstName || !lastName) {
       return res.status(400).json({ message: "All fields are required." });
@@ -94,7 +97,7 @@ router.post("/register", async (req, res) => {
       message: "Registration successful! Please check your email for the OTP.",
     });
   } catch (err) {
-    console.error("❌ Registration Error:", err); // 👈 This will now print the exact error to Render logs
+    console.error("❌ Registration Error:", err);
     return res.status(500).json({ message: err.message || "Registration failed." });
   }
 });

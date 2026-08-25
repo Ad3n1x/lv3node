@@ -1,16 +1,3 @@
-const app = express();
-
-app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-// 🔍 ADD THIS GLOBAL LOGGER
-app.use((req, res, next) => {
-  console.log(`📥 INCOMING REQUEST: ${req.method} ${req.url} from ${req.headers.origin || 'unknown origin'}`);
-  next();
-});
-
-
 require("dotenv").config();
 const dns = require("dns");
 const express = require("express");
@@ -37,9 +24,16 @@ if (
 
 const app = express();
 
+// Middleware
 app.use(cors());
 app.use(express.json());
-app.use(express.urlencoded({ extended: true })); // 👈 CRITICAL: Parses form data so req.body isn't empty
+app.use(express.urlencoded({ extended: true }));
+
+// 🔍 Global Request Logger (Tracks incoming requests & origins)
+app.use((req, res, next) => {
+  console.log(`📥 INCOMING REQUEST: ${req.method} ${req.originalUrl} from ${req.headers.origin || 'unknown origin'}`);
+  next();
+});
 
 // ✨ VAPID Configuration for Web Push
 const publicVapidKey = process.env.VAPID_PUBLIC_KEY || "YOUR_PUBLIC_VAPID_KEY";
@@ -76,11 +70,6 @@ app.get("/health", (req, res) => res.status(200).send("OK"));
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/trackers", trackerRoutes);
 
-app.use((req, res, next) => {
-  console.log(`⚠️ UNMATCHED ROUTE HIT: ${req.method} ${req.originalUrl}`);
-  res.status(404).json({ message: `Route ${req.originalUrl} not found on this server.` });
-});
-
 // ✨ Endpoint to save or update the authenticated user's E2EE public key
 app.post("/api/v1/users/public-key", verifyToken, async (req, res) => {
   try {
@@ -109,7 +98,13 @@ app.post("/api/v1/subscribe", verifyToken, async (req, res) => {
   }
 });
 
-// ✨ Cron job running daily at 8:00 PM to dispatch push alerts even if browser is closed
+// Catch-all unmatched route logger
+app.use((req, res, next) => {
+  console.log(`⚠️ UNMATCHED ROUTE HIT: ${req.method} ${req.originalUrl}`);
+  res.status(404).json({ message: `Route ${req.originalUrl} not found on this server.` });
+});
+
+// ✨ Cron job running daily at 8:00 PM to dispatch push alerts
 cron.schedule("0 20 * * *", async () => {
   try {
     const subs = await PushSubscription.find().populate("userId");
@@ -133,9 +128,7 @@ const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGODB_URI;
 
 if (!MONGO_URI) {
-  console.error(
-    "FATAL ERROR: MONGODB_URI is not defined in environment variables.",
-  );
+  console.error("FATAL ERROR: MONGODB_URI is not defined in environment variables.");
   process.exit(1);
 }
 
