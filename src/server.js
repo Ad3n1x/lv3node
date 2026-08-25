@@ -7,7 +7,7 @@ const cron = require("node-cron");
 const webpush = require("web-push");
 
 const User = require("./models/User"); 
-const authRoutes = require("./src/routes/auth");
+const authRoutes = require("./src/routes/auth.routes");
 const trackerRoutes = require("./src/routes/trackerRoutes");
 const verifyToken = require("./middleware/auth");
 
