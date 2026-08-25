@@ -57,7 +57,6 @@ trackerSchema.pre("save", function (next) {
     this.target = encryptData(this.target);
   }
   if (this.isModified("entries")) {
-    // FIX: Iterate and modify in-place. Do not use `.map` or `...entry`
     this.entries.forEach((entry) => {
       entry.value = encryptData(entry.value);
     });
@@ -80,7 +79,6 @@ trackerSchema.pre("findOneAndUpdate", function (next) {
     targetObj.target = encryptData(targetObj.target);
   }
   if (targetObj.entries && Array.isArray(targetObj.entries)) {
-    // FIX: Iterate and modify in-place
     targetObj.entries.forEach((entry) => {
       entry.value = encryptData(entry.value);
     });
@@ -99,7 +97,6 @@ trackerSchema.post(/^find|save|findOneAndUpdate/, function (docs) {
     if (doc.target !== undefined) doc.target = decryptData(doc.target);
     
     if (doc.entries && Array.isArray(doc.entries)) {
-      // FIX: Iterate and modify in-place. Do not use `.map` or `...entry`
       doc.entries.forEach((entry) => {
         if (entry.value !== undefined) {
           entry.value = decryptData(entry.value);
@@ -115,4 +112,5 @@ trackerSchema.post(/^find|save|findOneAndUpdate/, function (docs) {
   }
 });
 
-module.exports = mongoose.model("Tracker", trackerSchema);
+// ✅ Prevents OverwriteModelError on Render during hot reloads or multiple imports
+module.exports = mongoose.models.Tracker || mongoose.model("Tracker", trackerSchema);
