@@ -5,26 +5,18 @@ const SECRET_KEY = process.env.ENCRYPTION_KEY || "your_fallback_super_secret_key
 
 const encryptData = (data) => {
   if (data === null || data === undefined) return data;
+  // If it's an object or array, convert to JSON string first
   const stringValue = typeof data === "object" ? JSON.stringify(data) : String(data);
   return CryptoJS.AES.encrypt(stringValue, SECRET_KEY).toString();
 };
 
 const decryptData = (ciphertext) => {
-  if (!ciphertext || typeof ciphertext !== "string") return ciphertext;
-  
-  // If it doesn't look like crypto-js ciphertext, return it as-is
-  if (!ciphertext.startsWith("U2FsdGVkX1")) {
-    return ciphertext;
-  }
-
+  if (!ciphertext) return ciphertext;
   try {
     const bytes = CryptoJS.AES.decrypt(ciphertext, SECRET_KEY);
     const decryptedString = bytes.toString(CryptoJS.enc.Utf8);
     
-    if (!decryptedString) {
-      console.warn("⚠️ Decryption resulted in empty UTF-8 string (Possible key mismatch). Returning raw text.");
-      return ciphertext; 
-    }
+    if (!decryptedString) return ciphertext; 
     
     try {
       return JSON.parse(decryptedString);
@@ -32,8 +24,8 @@ const decryptData = (ciphertext) => {
       return !isNaN(decryptedString) && decryptedString !== "" ? Number(decryptedString) : decryptedString;
     }
   } catch (error) {
-    console.warn("⚠️ Decryption failed safely (Key mismatch or invalid ciphertext):", error.message);
-    return ciphertext; // Fall back to returning raw ciphertext instead of crashing
+    console.error("Decryption error:", error);
+    return ciphertext;
   }
 };
 
@@ -56,23 +48,25 @@ const trackerSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// --- HELPER TO DECRYPT & PARSE DOCUMENTS ---
 const decryptDocument = (doc) => {
   if (!doc) return;
+  // Convert mongoose doc to plain object if needed
   const d = typeof doc.toObject === "function" ? doc.toObject() : doc;
 
-  if (d.name) {
+  if (d.name && typeof d.name === "string" && d.name.startsWith("U2FsdGVkX1")) {
     doc.name = decryptData(d.name);
   }
-  if (d.target !== undefined) {
+  if (d.target !== undefined && typeof d.target === "string" && d.target.startsWith("U2FsdGVkX1")) {
     doc.target = decryptData(d.target);
   }
   
   if (d.entries !== undefined) {
-    let decrypted = decryptData(d.entries);
-    if (typeof decrypted === "string" && decrypted.startsWith("U2FsdGVkX1")) {
-      // Secondary safety check if double-encrypted
-      decrypted = decryptData(decrypted);
+    let decrypted = d.entries;
+    if (typeof d.entries === "string" && d.entries.startsWith("U2FsdGVkX1")) {
+      decrypted = decryptData(d.entries);
     }
+    // If it parsed into a JSON string or array, ensure it's a clean array for the frontend
     if (typeof decrypted === "string") {
       try {
         decrypted = JSON.parse(decrypted);
@@ -86,18 +80,16 @@ const decryptDocument = (doc) => {
   }
 };
 
+// --- ENCRYPTION PRE-HOOKS ---
 trackerSchema.pre("save", function (next) {
-  if (this.isModified("name") && this.name && !String(this.name).startsWith("U2FsdGVkX1")) {
+  if (this.isModified("name") && this.name) {
     this.name = encryptData(this.name);
   }
-  if (this.isModified("target") && this.target !== undefined && !String(this.target).startsWith("U2FsdGVkX1")) {
+  if (this.isModified("target") && this.target !== undefined) {
     this.target = encryptData(this.target);
   }
   if (this.isModified("entries") && this.entries !== undefined) {
-    const entriesStr = typeof this.entries === "object" ? JSON.stringify(this.entries) : String(this.entries);
-    if (!entriesStr.startsWith("U2FsdGVkX1")) {
-      this.entries = encryptData(entriesStr);
-    }
+    this.entries = encryptData(this.entries);
   }
   next();
 });
@@ -105,24 +97,23 @@ trackerSchema.pre("save", function (next) {
 trackerSchema.pre("findOneAndUpdate", function (next) {
   const update = this.getUpdate();
   if (!update) return next();
+
   const targetObj = update.$set || update;
 
-  if (targetObj.name && !String(targetObj.name).startsWith("U2FsdGVkX1")) {
+  if (targetObj.name) {
     targetObj.name = encryptData(targetObj.name);
   }
-  if (targetObj.target !== undefined && !String(targetObj.target).startsWith("U2FsdGVkX1")) {
+  if (targetObj.target !== undefined) {
     targetObj.target = encryptData(targetObj.target);
   }
   if (targetObj.entries !== undefined) {
-    const entriesStr = typeof targetObj.entries === "object" ? JSON.stringify(targetObj.entries) : String(targetObj.entries);
-    if (!entriesStr.startsWith("U2FsdGVkX1")) {
-      targetObj.entries = encryptData(entriesStr);
-    }
+    targetObj.entries = encryptData(targetObj.entries);
   }
 
   next();
 });
 
+// --- DECRYPTION POST-HOOKS ---
 trackerSchema.post("save", function (doc) { decryptDocument(doc); });
 trackerSchema.post("findOne", function (doc) { decryptDocument(doc); });
 trackerSchema.post("findOneAndUpdate", function (doc) { decryptDocument(doc); });
