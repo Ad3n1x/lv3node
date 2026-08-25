@@ -87,18 +87,23 @@ trackerSchema.set("toObject", {
 
 // --- ENCRYPTION BEFORE SAVING ---
 trackerSchema.pre("save", function (next) {
-  if (this.isModified("name") && this.name && !String(this.name).startsWith("U2FsdGVkX1")) {
+  if (this.name && !String(this.name).startsWith("U2FsdGVkX1")) {
     this.name = encryptData(this.name);
   }
-  if (this.isModified("target") && this.target !== undefined && !String(this.target).startsWith("U2FsdGVkX1")) {
+  
+  if (this.target !== undefined && this.target !== null && !String(this.target).startsWith("U2FsdGVkX1")) {
     this.target = encryptData(this.target);
   }
-  if (this.isModified("entries") && this.entries !== undefined) {
+
+  // Always check entries: if it's an array/object or a string that isn't encrypted yet, encrypt it!
+  if (this.entries !== undefined && this.entries !== null) {
     const entriesStr = typeof this.entries === "object" ? JSON.stringify(this.entries) : String(this.entries);
     if (!entriesStr.startsWith("U2FsdGVkX1")) {
       this.entries = encryptData(entriesStr);
+      this.markModified("entries"); // Forces Mongoose to recognize the Mixed type field change
     }
   }
+
   next();
 });
 
@@ -112,10 +117,12 @@ trackerSchema.pre("findOneAndUpdate", function (next) {
   if (targetObj.name && !String(targetObj.name).startsWith("U2FsdGVkX1")) {
     targetObj.name = encryptData(targetObj.name);
   }
-  if (targetObj.target !== undefined && !String(targetObj.target).startsWith("U2FsdGVkX1")) {
+  
+  if (targetObj.target !== undefined && targetObj.target !== null && !String(targetObj.target).startsWith("U2FsdGVkX1")) {
     targetObj.target = encryptData(targetObj.target);
   }
-  if (targetObj.entries !== undefined) {
+  
+  if (targetObj.entries !== undefined && targetObj.entries !== null) {
     const entriesStr = typeof targetObj.entries === "object" ? JSON.stringify(targetObj.entries) : String(targetObj.entries);
     if (!entriesStr.startsWith("U2FsdGVkX1")) {
       targetObj.entries = encryptData(entriesStr);
