@@ -11,6 +11,15 @@ const getUserId = (req) => {
   return req.user.id || req.user._id || req.user.userId || (typeof req.user === "string" ? req.user : null);
 };
 
+// 🛡️ Helper: Guarantees consistent tracker payload structure across all routes
+const formatTracker = (trackerDoc) => {
+  const trackerObj = trackerDoc.toJSON();
+  return {
+    ...trackerObj,
+    trackerName: trackerObj.name || "",
+  };
+};
+
 // Get all trackers for logged-in user
 router.get("/", auth, async (req, res) => {
   try {
@@ -18,9 +27,9 @@ router.get("/", auth, async (req, res) => {
     if (!userId) return res.status(401).json({ message: "Unauthorized: Invalid user session." });
 
     const trackers = await Tracker.find({ userId }).sort({ createdAt: -1 });
-    res.json(trackers);
+    return res.status(200).json(trackers.map((t) => formatTracker(t)));
   } catch (err) {
-    res.status(500).json({ message: "Error retrieving trackers.", error: err.message });
+    return res.status(500).json({ message: "Error retrieving trackers.", error: err.message });
   }
 });
 
@@ -28,8 +37,9 @@ router.get("/", auth, async (req, res) => {
 router.get("/:id", auth, async (req, res) => {
   try {
     const userId = getUserId(req);
-    const { id } = req.params;
+    if (!userId) return res.status(401).json({ message: "Unauthorized: Invalid user session." });
 
+    const { id } = req.params;
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ message: "Invalid tracker ID format." });
     }
@@ -39,13 +49,9 @@ router.get("/:id", auth, async (req, res) => {
       return res.status(404).json({ message: "Tracker not found or unauthorized." });
     }
 
-    const trackerObj = tracker.toJSON();
-    res.status(200).json({
-      ...trackerObj,
-      trackerName: trackerObj.name,
-    });
+    return res.status(200).json(formatTracker(tracker));
   } catch (err) {
-    res.status(500).json({ message: "Server error", error: err.message });
+    return res.status(500).json({ message: "Server error", error: err.message });
   }
 });
 
@@ -74,11 +80,11 @@ router.post("/", auth, async (req, res) => {
       color,
       target,
       unit,
-      entries: entries || [],
+      entries: Array.isArray(entries) ? entries : [],
     });
 
     const savedTracker = await tracker.save();
-    return res.status(201).json(savedTracker.toJSON());
+    return res.status(201).json(formatTracker(savedTracker));
   } catch (err) {
     console.error("Tracker creation error:", err.message);
     return res.status(400).json({ message: "Failed to create tracker.", error: err.message });
@@ -89,8 +95,9 @@ router.post("/", auth, async (req, res) => {
 router.post("/:id/entries", auth, async (req, res) => {
   try {
     const userId = getUserId(req);
-    const { id } = req.params;
+    if (!userId) return res.status(401).json({ message: "Unauthorized: Invalid user session." });
 
+    const { id } = req.params;
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ message: "Invalid tracker ID format." });
     }
@@ -100,33 +107,32 @@ router.post("/:id/entries", auth, async (req, res) => {
       return res.status(404).json({ message: "Tracker not found or unauthorized." });
     }
 
-    const trackerObj = tracker.toJSON();
-    let currentEntries = Array.isArray(trackerObj.entries) ? trackerObj.entries : [];
-    currentEntries.push(req.body);
+    if (!req.body || Object.keys(req.body).length === 0) {
+      return res.status(400).json({ message: "Entry data cannot be empty." });
+    }
 
-    tracker.entries = currentEntries;
+    // Direct Mongoose document array manipulation
+    if (!Array.isArray(tracker.entries)) {
+      tracker.entries = [];
+    }
+    tracker.entries.push(req.body);
     tracker.markModified("entries");
 
     const updatedTracker = await tracker.save();
-    const updatedObj = updatedTracker.toJSON();
-
-    // Return flat object so frontend state updates cleanly
-    res.status(200).json({
-      ...updatedObj,
-      trackerName: updatedObj.name,
-    });
+    return res.status(200).json(formatTracker(updatedTracker));
   } catch (err) {
     console.error("Failed to add entry:", err);
-    res.status(400).json({ message: "Failed to add entry.", error: err.message });
+    return res.status(400).json({ message: "Failed to add entry.", error: err.message });
   }
 });
 
-// Update tracker details (with smart entries handler)
+// Update tracker details
 router.put("/:id", auth, async (req, res) => {
   try {
     const userId = getUserId(req);
-    const { id } = req.params;
+    if (!userId) return res.status(401).json({ message: "Unauthorized: Invalid user session." });
 
+    const { id } = req.params;
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ message: "Invalid tracker ID format." });
     }
@@ -136,39 +142,36 @@ router.put("/:id", auth, async (req, res) => {
       return res.status(404).json({ message: "Tracker not found or unauthorized." });
     }
 
-    if (req.body.name !== undefined) tracker.name = req.body.name.trim();
-    if (req.body.type !== undefined) tracker.type = req.body.type;
-    if (req.body.icon !== undefined) tracker.icon = req.body.icon;
-    if (req.body.color !== undefined) tracker.color = req.body.color;
-    if (req.body.target !== undefined) tracker.target = req.body.target;
-    if (req.body.unit !== undefined) tracker.unit = req.body.unit;
+    const body = req.body || {};
 
-    // --- SMART ENTRIES HANDLER ---
-    const trackerObj = tracker.toJSON();
-    let currentEntries = Array.isArray(trackerObj.entries) ? trackerObj.entries : [];
+    // Standard field updates
+    if (body.name !== undefined) tracker.name = body.name.trim();
+    if (body.type !== undefined) tracker.type = body.type;
+    if (body.icon !== undefined) tracker.icon = body.icon;
+    if (body.color !== undefined) tracker.color = body.color;
+    if (body.target !== undefined) tracker.target = body.target;
+    if (body.unit !== undefined) tracker.unit = body.unit;
 
-    if (req.body.entries !== undefined) {
-      currentEntries = Array.isArray(req.body.entries) ? req.body.entries : [req.body.entries];
-    } else if (req.body.entry !== undefined) {
-      currentEntries.push(req.body.entry);
-    } else if (req.body.date || req.body.status || req.body.value !== undefined) {
-      currentEntries.push(req.body);
+    // Direct entry updates
+    if (!Array.isArray(tracker.entries)) {
+      tracker.entries = [];
     }
 
-    tracker.entries = currentEntries;
+    if (body.entries !== undefined) {
+      tracker.entries = Array.isArray(body.entries) ? body.entries : [body.entries];
+    } else if (body.entry !== undefined) {
+      tracker.entries.push(body.entry);
+    } else if (body.newEntry !== undefined) {
+      tracker.entries.push(body.newEntry);
+    }
+
     tracker.markModified("entries");
 
     const updatedTracker = await tracker.save();
-    const updatedObj = updatedTracker.toJSON();
-
-    // Return flat object so frontend state updates cleanly
-    res.status(200).json({
-      ...updatedObj,
-      trackerName: updatedObj.name,
-    });
+    return res.status(200).json(formatTracker(updatedTracker));
   } catch (err) {
     console.error("Failed to update tracker:", err);
-    res.status(500).json({ message: "Failed to update tracker.", error: err.message });
+    return res.status(500).json({ message: "Failed to update tracker.", error: err.message });
   }
 });
 
@@ -176,8 +179,9 @@ router.put("/:id", auth, async (req, res) => {
 router.delete("/:id", auth, async (req, res) => {
   try {
     const userId = getUserId(req);
-    const { id } = req.params;
+    if (!userId) return res.status(401).json({ message: "Unauthorized: Invalid user session." });
 
+    const { id } = req.params;
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ message: "Invalid tracker ID format." });
     }
@@ -185,10 +189,10 @@ router.delete("/:id", auth, async (req, res) => {
     const tracker = await Tracker.findOneAndDelete({ _id: id, userId });
     if (!tracker) return res.status(404).json({ message: "Tracker not found or unauthorized." });
 
-    res.json({ message: "Tracker deleted successfully.", id });
+    return res.status(200).json({ message: "Tracker deleted successfully.", id });
   } catch (err) {
     console.error("Failed to delete tracker:", err);
-    res.status(500).json({ message: "Failed to delete tracker.", error: err.message });
+    return res.status(500).json({ message: "Failed to delete tracker.", error: err.message });
   }
 });
 
