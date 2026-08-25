@@ -111,11 +111,9 @@ router.post("/:id/entries", auth, async (req, res) => {
       return res.status(400).json({ message: "Entry data cannot be empty." });
     }
 
-    // Support both direct array manipulation and encrypted payload strings
     if (Array.isArray(tracker.entries)) {
       tracker.entries.push(req.body);
     } else {
-      // Fallback if entries is stored as mixed/string data
       tracker.entries = req.body;
     }
     tracker.markModified("entries");
@@ -156,7 +154,7 @@ router.put("/:id", auth, async (req, res) => {
 
     // Handle encrypted string payloads or traditional array updates safely
     if (body.entries !== undefined) {
-      tracker.entries = body.entries;
+      tracker.set("entries", body.entries);
     } else if (body.entry !== undefined) {
       if (!Array.isArray(tracker.entries)) tracker.entries = [];
       tracker.entries.push(body.entry);
