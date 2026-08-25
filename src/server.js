@@ -7,7 +7,7 @@ const cron = require("node-cron");
 const webpush = require("web-push");
 
 const User = require("./models/User"); 
-const authRoutes = require("./src/routes/auth"); // 👈 Fixed relative path to match your folder structure
+const authRoutes = require("./src/routes/auth");
 const trackerRoutes = require("./src/routes/trackerRoutes");
 const verifyToken = require("./middleware/auth");
 
@@ -38,7 +38,7 @@ webpush.setVapidDetails(
   privateVapidKey
 );
 
-// ✨ Push Subscription Schema & Model (Safe against OverwriteModelError)
+// ✨ Push Subscription Schema & Model
 const subscriptionSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   subscription: Object,
@@ -56,9 +56,17 @@ app.get("/", (req, res) => {
 
 app.get("/health", (req, res) => res.status(200).send("OK"));
 
-// API Routes
+// ==========================================
+// API ROUTES (Explicitly mounted and isolated)
+// ==========================================
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/trackers", trackerRoutes);
+
+// Catch-all route debugger to log any stray or unmatched requests
+app.use((req, res, next) => {
+  console.log(`⚠️ UNMATCHED ROUTE HIT: ${req.method} ${req.originalUrl}`);
+  res.status(404).json({ message: `Route ${req.originalUrl} not found on this server.` });
+});
 
 // ✨ Endpoint to save or update the authenticated user's E2EE public key
 app.post("/api/v1/users/public-key", verifyToken, async (req, res) => {
