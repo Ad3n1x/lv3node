@@ -17,6 +17,9 @@ const decryptData = (ciphertext) => {
     const bytes = CryptoJS.AES.decrypt(ciphertext, SECRET_KEY);
     const decryptedString = bytes.toString(CryptoJS.enc.Utf8);
     
+    // If decryption fails (e.g., plain text passed in), return the original
+    if (!decryptedString) return ciphertext; 
+    
     try {
       return JSON.parse(decryptedString);
     } catch {
@@ -28,6 +31,12 @@ const decryptData = (ciphertext) => {
   }
 };
 
+// Explicitly define the entry schema so Mongoose manages _ids and dates correctly
+const entrySchema = new mongoose.Schema({
+  date: { type: String, required: true }, // Clear for sorting/matching
+  value: { type: mongoose.Schema.Types.Mixed }, // Encrypted
+});
+
 const trackerSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
   name: { type: String, required: true }, // Encrypted
@@ -36,12 +45,7 @@ const trackerSchema = new mongoose.Schema({
   color: { type: String, default: "#3b82f6" },
   target: { type: mongoose.Schema.Types.Mixed }, // Encrypted
   unit: { type: String },
-  entries: [
-    {
-      date: { type: String, required: true }, // Clear for sorting/matching
-      value: { type: mongoose.Schema.Types.Mixed }, // Encrypted
-    },
-  ],
+  entries: [entrySchema], // Use explicit subdocument schema
 }, { timestamps: true });
 
 // --- 1. ENCRYPT BEFORE SAVING (Handles new Tracker() & .save()) ---
@@ -53,10 +57,10 @@ trackerSchema.pre("save", function (next) {
     this.target = encryptData(this.target);
   }
   if (this.isModified("entries")) {
-    this.entries = this.entries.map((entry) => ({
-      ...entry,
-      value: encryptData(entry.value),
-    }));
+    // FIX: Iterate and modify in-place. Do not use `.map` or `...entry`
+    this.entries.forEach((entry) => {
+      entry.value = encryptData(entry.value);
+    });
     this.markModified("entries");
   }
   next();
@@ -75,11 +79,11 @@ trackerSchema.pre("findOneAndUpdate", function (next) {
   if (targetObj.target !== undefined) {
     targetObj.target = encryptData(targetObj.target);
   }
-  if (targetObj.entries) {
-    targetObj.entries = targetObj.entries.map((entry) => ({
-      ...entry,
-      value: encryptData(entry.value),
-    }));
+  if (targetObj.entries && Array.isArray(targetObj.entries)) {
+    // FIX: Iterate and modify in-place
+    targetObj.entries.forEach((entry) => {
+      entry.value = encryptData(entry.value);
+    });
   }
 
   next();
@@ -95,10 +99,12 @@ trackerSchema.post(/^find|save|findOneAndUpdate/, function (docs) {
     if (doc.target !== undefined) doc.target = decryptData(doc.target);
     
     if (doc.entries && Array.isArray(doc.entries)) {
-      doc.entries = doc.entries.map((entry) => ({
-        ...entry,
-        value: decryptData(entry.value),
-      }));
+      // FIX: Iterate and modify in-place. Do not use `.map` or `...entry`
+      doc.entries.forEach((entry) => {
+        if (entry.value !== undefined) {
+          entry.value = decryptData(entry.value);
+        }
+      });
     }
   };
 
