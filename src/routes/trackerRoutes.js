@@ -44,7 +44,7 @@ router.get("/:id", auth, async (req, res) => {
         trackerName: tracker.name,
         unit: tracker.unit,
         target: tracker.target,
-        entries: tracker.entries, // Decrypted automatically by Mongoose middleware
+        entries: tracker.entries,
       },
     });
   } catch (err) {
@@ -66,7 +66,7 @@ router.post("/", auth, async (req, res) => {
 
     const tracker = new Tracker({
       userId,
-      name,
+      name: name.trim(),
       type,
       icon,
       color,
@@ -78,6 +78,7 @@ router.post("/", auth, async (req, res) => {
     const savedTracker = await tracker.save();
     res.status(201).json(savedTracker);
   } catch (err) {
+    console.error("Tracker creation error:", err.message);
     res.status(400).json({ message: "Failed to create tracker.", error: err.message });
   }
 });
@@ -98,7 +99,7 @@ router.put("/:id", auth, async (req, res) => {
       return res.status(404).json({ message: "Tracker not found or unauthorized." });
     }
 
-    if (req.body.name !== undefined) tracker.name = req.body.name;
+    if (req.body.name !== undefined) tracker.name = req.body.name.trim();
     if (req.body.type !== undefined) tracker.type = req.body.type;
     if (req.body.icon !== undefined) tracker.icon = req.body.icon;
     if (req.body.color !== undefined) tracker.color = req.body.color;
