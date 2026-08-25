@@ -1,7 +1,7 @@
 const mongoose = require("mongoose");
 const CryptoJS = require("crypto-js");
 
-const SECRET_KEY = process.env.ENCRYPTION_KEY || "your_fallback_super_secret_key_32_bytes";
+const SECRET_KEY = process.env.ENCRYPTION_KEY;
 
 const encryptData = (text) => {
   if (text === null || text === undefined) return text;
@@ -25,7 +25,7 @@ const decryptData = (ciphertext) => {
       return !isNaN(decryptedString) && decryptedString !== "" ? Number(decryptedString) : decryptedString;
     }
   } catch (error) {
-    console.error("Decryption error:", error);
+    // Gracefully fallback without throwing a noisy stack trace if the key doesn't match
     return ciphertext;
   }
 };
