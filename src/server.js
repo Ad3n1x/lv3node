@@ -1,210 +1,143 @@
+require("dotenv").config();
+const dns = require("dns");
 const express = require("express");
 const mongoose = require("mongoose");
-const Tracker = require("./models/Tracker");
-const auth = require("./middleware/auth");
+const cors = require("cors");
+const cron = require("node-cron");
+const webpush = require("web-push");
 
-const router = express.Router();
+const User = require("./models/User"); 
+const authRoutes = require("./routes/auth.routes");
+const trackerRoutes = require("./routes/trackerRoutes");
+const verifyToken = require("./middleware/auth");
 
-const getUserId = (req) => {
-  if (!req.user) return null;
-  return req.user.id || req.user._id || req.user.userId || (typeof req.user === "string" ? req.user : null);
-};
-
-// Get all trackers for logged-in user
-router.get("/", auth, async (req, res) => {
+if (
+  process.env.MONGODB_URI &&
+  process.env.MONGODB_URI.startsWith("mongodb+srv://")
+) {
   try {
-    const userId = getUserId(req);
-    if (!userId) return res.status(401).json({ message: "Unauthorized: Invalid user session." });
+    dns.setServers(["8.8.8.8", "8.8.4.4"]);
+  } catch (e) {
+    console.warn("Could not set custom DNS servers:", e.message);
+  }
+}
 
-    const trackers = await Tracker.find({ userId }).sort({ createdAt: -1 });
-    // res.json automatically invokes .toJSON() on all model instances, decrypting fields safely
-    res.json(trackers);
+const app = express();
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// 🔍 Global Request Logger (Tracks incoming requests & origins)
+app.use((req, res, next) => {
+  console.log(`📥 INCOMING REQUEST: ${req.method} ${req.originalUrl} from ${req.headers.origin || 'unknown origin'}`);
+  next();
+});
+
+// ✨ VAPID Configuration for Web Push
+const publicVapidKey = process.env.VAPID_PUBLIC_KEY || "YOUR_PUBLIC_VAPID_KEY";
+const privateVapidKey =
+  process.env.VAPID_PRIVATE_KEY || "YOUR_PRIVATE_VAPID_KEY";
+
+webpush.setVapidDetails(
+  "mailto:support@unitrack.com",
+  publicVapidKey,
+  privateVapidKey
+);
+
+// ✨ Push Subscription Schema & Model
+const subscriptionSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+  subscription: Object,
+});
+const PushSubscription = mongoose.models.PushSubscription || mongoose.model("PushSubscription", subscriptionSchema);
+
+// Base & Health Routes
+app.get("/", (req, res) => {
+  res.status(200).json({
+    status: "success",
+    message: "API service is running.",
+    health: "/health",
+  });
+});
+
+app.get("/health", (req, res) => res.status(200).send("OK"));
+
+// ==========================================
+// API ROUTES
+// ==========================================
+app.use("/api/v1/auth", authRoutes);
+app.use("/api/v1/trackers", trackerRoutes);
+
+// ✨ Endpoint to save or update the authenticated user's E2EE public key
+app.post("/api/v1/users/public-key", verifyToken, async (req, res) => {
+  try {
+    const { publicKey } = req.body;
+    await User.findByIdAndUpdate(req.user.id, { publicKey });
+    res.status(200).json({ message: "Public key synchronized successfully" });
   } catch (err) {
-    res.status(500).json({ message: "Error retrieving trackers.", error: err.message });
+    console.error("Failed to save public key:", err);
+    res.status(500).json({ error: "Failed to save public key" });
   }
 });
 
-// Get a single tracker by ID
-router.get("/:id", auth, async (req, res) => {
+// ✨ Endpoint to save browser push subscription
+app.post("/api/v1/subscribe", verifyToken, async (req, res) => {
   try {
-    const userId = getUserId(req);
-    const { id } = req.params;
+    const subscription = req.body;
+    await PushSubscription.findOneAndUpdate(
+      { userId: req.user.id },
+      { subscription },
+      { upsert: true, new: true },
+    );
+    res.status(201).json({ message: "Subscribed successfully" });
+  } catch (err) {
+    console.error("Failed to save subscription:", err);
+    res.status(500).json({ error: "Failed to save subscription" });
+  }
+});
 
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ message: "Invalid tracker ID format." });
-    }
+// Catch-all unmatched route logger
+app.use((req, res, next) => {
+  console.log(`⚠️ UNMATCHED ROUTE HIT: ${req.method} ${req.originalUrl}`);
+  res.status(404).json({ message: `Route ${req.originalUrl} not found on this server.` });
+});
 
-    const tracker = await Tracker.findOne({ _id: id, userId });
+// ✨ Cron job running daily at 8:00 PM to dispatch push alerts
+cron.schedule("0 20 * * *", async () => {
+  try {
+    const subs = await PushSubscription.find().populate("userId");
 
-    if (!tracker) {
-      return res.status(404).json({ message: "Tracker not found or unauthorized." });
-    }
-
-    // Convert to JSON first so schema transforms decrypt all properties safely
-    const trackerObj = tracker.toJSON();
-
-    res.status(200).json({
-      status: "success",
-      data: {
-        ...trackerObj,
-        trackerName: trackerObj.name, // Safely decrypted string
-      },
+    const payload = JSON.stringify({
+      title: "Uni-Track Reminder 🔔",
+      body: "You haven't updated your trackers today! Keep your streak alive.",
     });
-  } catch (err) {
-    res.status(500).json({ message: "Server error", error: err.message });
-  }
-});
 
-// Create tracker for logged-in user
-router.post("/", auth, async (req, res) => {
-  try {
-    const userId = getUserId(req);
-    if (!userId) {
-      return res.status(401).json({ message: "Unauthorized: User ID could not be extracted from token." });
-    }
-
-    const { name, type, icon, color, target, unit, entries } = req.body || {};
-
-    if (!name || !type) {
-      return res.status(400).json({ 
-        message: "Validation Error: 'name' and 'type' are required fields.",
-        receivedBody: req.body 
+    for (const sub of subs) {
+      await webpush.sendNotification(sub.subscription, payload).catch((err) => {
+        console.error("Error sending push notification:", err);
       });
     }
-
-    const tracker = new Tracker({
-      userId,
-      name: name.trim(),
-      type,
-      icon,
-      color,
-      target,
-      unit,
-      entries: entries || [],
-    });
-
-    const savedTracker = await tracker.save();
-    return res.status(201).json(savedTracker.toJSON());
-  } catch (err) {
-    console.error("Tracker creation error:", err.message);
-    return res.status(400).json({ message: "Failed to create tracker.", error: err.message });
+  } catch (error) {
+    console.error("Cron job error:", error);
   }
 });
 
-// Dedicated Endpoint to Add an Entry Permanently
-router.post("/:id/entries", auth, async (req, res) => {
-  try {
-    const userId = getUserId(req);
-    const { id } = req.params;
+const PORT = process.env.PORT || 5000;
+const MONGO_URI = process.env.MONGODB_URI;
 
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ message: "Invalid tracker ID format." });
-    }
+if (!MONGO_URI) {
+  console.error("FATAL ERROR: MONGODB_URI is not defined in environment variables.");
+  process.exit(1);
+}
 
-    const tracker = await Tracker.findOne({ _id: id, userId });
-    if (!tracker) {
-      return res.status(404).json({ message: "Tracker not found or unauthorized." });
-    }
-
-    // Use .toJSON() to get the decrypted JS entries array automatically
-    const trackerObj = tracker.toJSON();
-    let currentEntries = Array.isArray(trackerObj.entries) ? trackerObj.entries : [];
-
-    // Push new entry payload
-    currentEntries.push(req.body);
-
-    // Update entries and mark field modified for Mongoose mixed-type tracking
-    tracker.entries = currentEntries;
-    tracker.markModified("entries");
-
-    const updatedTracker = await tracker.save(); // Pre-save handles encryption automatically
-    const updatedObj = updatedTracker.toJSON();
-
-    res.status(200).json({
-      status: "success",
-      data: {
-        ...updatedObj,
-        trackerName: updatedObj.name,
-      },
-    });
-  } catch (err) {
-    console.error("Failed to add entry:", err);
-    res.status(400).json({ message: "Failed to add entry.", error: err.message });
-  }
-});
-
-// Update tracker details (with smart entries handler)
-router.put("/:id", auth, async (req, res) => {
-  try {
-    const userId = getUserId(req);
-    const { id } = req.params;
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ message: "Invalid tracker ID format." });
-    }
-
-    const tracker = await Tracker.findOne({ _id: id, userId });
-
-    if (!tracker) {
-      return res.status(404).json({ message: "Tracker not found or unauthorized." });
-    }
-
-    if (req.body.name !== undefined) tracker.name = req.body.name.trim();
-    if (req.body.type !== undefined) tracker.type = req.body.type;
-    if (req.body.icon !== undefined) tracker.icon = req.body.icon;
-    if (req.body.color !== undefined) tracker.color = req.body.color;
-    if (req.body.target !== undefined) tracker.target = req.body.target;
-    if (req.body.unit !== undefined) tracker.unit = req.body.unit;
-
-    // --- SMART ENTRIES HANDLER ---
-    const trackerObj = tracker.toJSON();
-    let currentEntries = Array.isArray(trackerObj.entries) ? trackerObj.entries : [];
-
-    if (req.body.entries !== undefined) {
-      currentEntries = Array.isArray(req.body.entries) ? req.body.entries : [req.body.entries];
-    } else if (req.body.entry !== undefined) {
-      currentEntries.push(req.body.entry);
-    } else if (req.body.date || req.body.status || req.body.value !== undefined) {
-      currentEntries.push(req.body);
-    }
-
-    tracker.entries = currentEntries;
-    tracker.markModified("entries");
-
-    const updatedTracker = await tracker.save();
-    const updatedObj = updatedTracker.toJSON();
-
-    res.status(200).json({
-      status: "success",
-      data: {
-        ...updatedObj,
-        trackerName: updatedObj.name,
-      },
-    });
-  } catch (err) {
-    console.error("Failed to update tracker:", err);
-    res.status(500).json({ message: "Failed to update tracker.", error: err.message });
-  }
-});
-
-// Delete tracker
-router.delete("/:id", auth, async (req, res) => {
-  try {
-    const userId = getUserId(req);
-    const { id } = req.params;
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ message: "Invalid tracker ID format." });
-    }
-
-    const tracker = await Tracker.findOneAndDelete({ _id: id, userId });
-    if (!tracker) return res.status(404).json({ message: "Tracker not found or unauthorized." });
-
-    res.json({ message: "Tracker deleted successfully.", id });
-  } catch (err) {
-    console.error("Failed to delete tracker:", err);
-    res.status(500).json({ message: "Failed to delete tracker.", error: err.message });
-  }
-});
-
-module.exports = router;
+mongoose
+  .connect(MONGO_URI)
+  .then(() => {
+    console.log("Connected to MongoDB successfully");
+    app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+  })
+  .catch((err) => {
+    console.error("MongoDB connection error:", err);
+  });
