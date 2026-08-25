@@ -3,9 +3,10 @@ const CryptoJS = require("crypto-js");
 
 const SECRET_KEY = process.env.ENCRYPTION_KEY || "your_fallback_super_secret_key_32_bytes";
 
-const encryptData = (text) => {
-  if (text === null || text === undefined) return text;
-  const stringValue = typeof text === "object" ? JSON.stringify(text) : String(text);
+const encryptData = (data) => {
+  if (data === null || data === undefined) return data;
+  // If it's an object or array, convert to JSON string first
+  const stringValue = typeof data === "object" ? JSON.stringify(data) : String(data);
   return CryptoJS.AES.encrypt(stringValue, SECRET_KEY).toString();
 };
 
@@ -42,35 +43,53 @@ const trackerSchema = new mongoose.Schema(
     color: { type: String, default: "#3b82f6" },
     target: { type: mongoose.Schema.Types.Mixed },
     unit: { type: String },
-    entries: { type: String, default: "" },
+    entries: { type: mongoose.Schema.Types.Mixed, default: [] },
   },
   { timestamps: true }
 );
 
-// --- HELPER TO DECRYPT DOCUMENTS ---
+// --- HELPER TO DECRYPT & PARSE DOCUMENTS ---
 const decryptDocument = (doc) => {
   if (!doc) return;
-  // If doc is a Mongoose document, use .toObject() or direct assignment if mutable
-  if (doc.name) doc.name = decryptData(doc.name);
-  if (doc.target !== undefined) doc.target = decryptData(doc.target);
-  if (doc.entries) doc.entries = decryptData(doc.entries);
+  // Convert mongoose doc to plain object if needed
+  const d = typeof doc.toObject === "function" ? doc.toObject() : doc;
+
+  if (d.name && typeof d.name === "string" && d.name.startsWith("U2FsdGVkX1")) {
+    doc.name = decryptData(d.name);
+  }
+  if (d.target !== undefined && typeof d.target === "string" && d.target.startsWith("U2FsdGVkX1")) {
+    doc.target = decryptData(d.target);
+  }
+  
+  if (d.entries !== undefined) {
+    let decrypted = d.entries;
+    if (typeof d.entries === "string" && d.entries.startsWith("U2FsdGVkX1")) {
+      decrypted = decryptData(d.entries);
+    }
+    // If it parsed into a JSON string or array, ensure it's a clean array for the frontend
+    if (typeof decrypted === "string") {
+      try {
+        decrypted = JSON.parse(decrypted);
+      } catch {
+        decrypted = [];
+      }
+    }
+    doc.entries = Array.isArray(decrypted) ? decrypted : [];
+  } else {
+    doc.entries = [];
+  }
 };
 
-// --- 1. ENCRYPTION HOOKS ---
+// --- ENCRYPTION PRE-HOOKS ---
 trackerSchema.pre("save", function (next) {
-  if (this.isModified("name") && !this.name.startsWith("U2FsdGVkX1")) {
+  if (this.isModified("name") && this.name) {
     this.name = encryptData(this.name);
   }
   if (this.isModified("target") && this.target !== undefined) {
-    const targetStr = String(this.target);
-    if (!targetStr.startsWith("U2FsdGVkX1")) {
-      this.target = encryptData(this.target);
-    }
+    this.target = encryptData(this.target);
   }
-  if (this.isModified("entries") && this.entries) {
-    if (!this.entries.startsWith("U2FsdGVkX1")) {
-      this.entries = encryptData(this.entries);
-    }
+  if (this.isModified("entries") && this.entries !== undefined) {
+    this.entries = encryptData(this.entries);
   }
   next();
 });
@@ -81,32 +100,23 @@ trackerSchema.pre("findOneAndUpdate", function (next) {
 
   const targetObj = update.$set || update;
 
-  if (targetObj.name && !String(targetObj.name).startsWith("U2FsdGVkX1")) {
+  if (targetObj.name) {
     targetObj.name = encryptData(targetObj.name);
   }
-  if (targetObj.target !== undefined && !String(targetObj.target).startsWith("U2FsdGVkX1")) {
+  if (targetObj.target !== undefined) {
     targetObj.target = encryptData(targetObj.target);
   }
-  if (targetObj.entries && !String(targetObj.entries).startsWith("U2FsdGVkX1")) {
+  if (targetObj.entries !== undefined) {
     targetObj.entries = encryptData(targetObj.entries);
   }
 
   next();
 });
 
-// --- 2. DECRYPTION HOOKS (Explicitly defined for safety) ---
-trackerSchema.post("save", function (doc) {
-  decryptDocument(doc);
-});
-
-trackerSchema.post("findOne", function (doc) {
-  decryptDocument(doc);
-});
-
-trackerSchema.post("findOneAndUpdate", function (doc) {
-  decryptDocument(doc);
-});
-
+// --- DECRYPTION POST-HOOKS ---
+trackerSchema.post("save", function (doc) { decryptDocument(doc); });
+trackerSchema.post("findOne", function (doc) { decryptDocument(doc); });
+trackerSchema.post("findOneAndUpdate", function (doc) { decryptDocument(doc); });
 trackerSchema.post("find", function (docs) {
   if (Array.isArray(docs)) {
     docs.forEach(decryptDocument);
