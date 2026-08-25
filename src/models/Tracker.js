@@ -10,7 +10,9 @@ const encryptData = (text) => {
 };
 
 const decryptData = (ciphertext) => {
-  if (!ciphertext) return ciphertext;
+  if (!ciphertext || typeof ciphertext !== "string") return ciphertext;
+  if (!ciphertext.startsWith("U2FsdGVkX1")) return ciphertext;
+
   try {
     const bytes = CryptoJS.AES.decrypt(ciphertext, SECRET_KEY);
     const decryptedString = bytes.toString(CryptoJS.enc.Utf8);
@@ -42,7 +44,7 @@ const trackerSchema = new mongoose.Schema(
     color: { type: String, default: "#3b82f6" },
     target: { type: mongoose.Schema.Types.Mixed },
     unit: { type: String },
-    entries: { type: String, default: "" },
+    entries: { type: mongoose.Schema.Types.Mixed, default: [] },
   },
   { timestamps: true }
 );
@@ -50,26 +52,38 @@ const trackerSchema = new mongoose.Schema(
 // --- HELPER TO DECRYPT DOCUMENTS ---
 const decryptDocument = (doc) => {
   if (!doc) return;
-  // If doc is a Mongoose document, use .toObject() or direct assignment if mutable
   if (doc.name) doc.name = decryptData(doc.name);
   if (doc.target !== undefined) doc.target = decryptData(doc.target);
-  if (doc.entries) doc.entries = decryptData(doc.entries);
+  
+  if (doc.entries !== undefined) {
+    let decryptedEntries = decryptData(doc.entries);
+    if (typeof decryptedEntries === "string" && decryptedEntries.trim() !== "") {
+      try {
+        decryptedEntries = JSON.parse(decryptedEntries);
+      } catch {
+        decryptedEntries = [];
+      }
+    }
+    doc.entries = Array.isArray(decryptedEntries) ? decryptedEntries : [];
+  }
 };
 
 // --- 1. ENCRYPTION HOOKS ---
 trackerSchema.pre("save", function (next) {
-  if (this.isModified("name") && !this.name.startsWith("U2FsdGVkX1")) {
+  if (this.name && !String(this.name).startsWith("U2FsdGVkX1")) {
     this.name = encryptData(this.name);
   }
-  if (this.isModified("target") && this.target !== undefined) {
+  if (this.target !== undefined && this.target !== null) {
     const targetStr = String(this.target);
     if (!targetStr.startsWith("U2FsdGVkX1")) {
       this.target = encryptData(this.target);
     }
   }
-  if (this.isModified("entries") && this.entries) {
-    if (!this.entries.startsWith("U2FsdGVkX1")) {
-      this.entries = encryptData(this.entries);
+  if (this.entries !== undefined && this.entries !== null) {
+    const entriesStr = typeof this.entries === "object" ? JSON.stringify(this.entries) : String(this.entries);
+    if (!entriesStr.startsWith("U2FsdGVkX1")) {
+      this.entries = encryptData(entriesStr);
+      this.markModified("entries");
     }
   }
   next();
@@ -87,14 +101,17 @@ trackerSchema.pre("findOneAndUpdate", function (next) {
   if (targetObj.target !== undefined && !String(targetObj.target).startsWith("U2FsdGVkX1")) {
     targetObj.target = encryptData(targetObj.target);
   }
-  if (targetObj.entries && !String(targetObj.entries).startsWith("U2FsdGVkX1")) {
-    targetObj.entries = encryptData(targetObj.entries);
+  if (targetObj.entries !== undefined && targetObj.entries !== null) {
+    const entriesStr = typeof targetObj.entries === "object" ? JSON.stringify(targetObj.entries) : String(targetObj.entries);
+    if (!entriesStr.startsWith("U2FsdGVkX1")) {
+      targetObj.entries = encryptData(entriesStr);
+    }
   }
 
   next();
 });
 
-// --- 2. DECRYPTION HOOKS (Explicitly defined for safety) ---
+// --- 2. DECRYPTION HOOKS ---
 trackerSchema.post("save", function (doc) {
   decryptDocument(doc);
 });
