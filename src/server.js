@@ -26,6 +26,7 @@ const app = express();
 
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true })); // 👈 CRITICAL: Parses form data so req.body isn't empty
 
 // ✨ VAPID Configuration for Web Push
 const publicVapidKey = process.env.VAPID_PUBLIC_KEY || "YOUR_PUBLIC_VAPID_KEY";
@@ -57,12 +58,11 @@ app.get("/", (req, res) => {
 app.get("/health", (req, res) => res.status(200).send("OK"));
 
 // ==========================================
-// API ROUTES (Explicitly mounted and isolated)
+// API ROUTES
 // ==========================================
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/trackers", trackerRoutes);
 
-// Catch-all route debugger to log any stray or unmatched requests
 app.use((req, res, next) => {
   console.log(`⚠️ UNMATCHED ROUTE HIT: ${req.method} ${req.originalUrl}`);
   res.status(404).json({ message: `Route ${req.originalUrl} not found on this server.` });
