@@ -1,13 +1,11 @@
 const express = require("express");
 const mongoose = require("mongoose");
-const CryptoJS = require("crypto-js");
 const Tracker = require("../models/Tracker");
 const auth = require("../middleware/auth");
 
 const router = express.Router();
-const SECRET_KEY = process.env.ENCRYPTION_KEY || "your_fallback_super_secret_key_32_bytes";
 
-// 🛡️ Enhanced Helper: Safely extracts user ID from any JWT payload structure
+// Helper: Safely extracts user ID from any JWT payload structure
 const getUserId = (req) => {
   if (!req.user) return null;
   return req.user.id || req.user._id || req.user.userId || (typeof req.user === "string" ? req.user : null);
@@ -20,6 +18,7 @@ router.get("/", auth, async (req, res) => {
     if (!userId) return res.status(401).json({ message: "Unauthorized: Invalid user session." });
 
     const trackers = await Tracker.find({ userId }).sort({ createdAt: -1 });
+    // res.json automatically invokes .toJSON() on all model instances
     res.json(trackers);
   } catch (err) {
     res.status(500).json({ message: "Error retrieving trackers.", error: err.message });
@@ -42,14 +41,14 @@ router.get("/:id", auth, async (req, res) => {
       return res.status(404).json({ message: "Tracker not found or unauthorized." });
     }
 
+    // Convert to JSON first so schema transforms decrypt all properties safely
+    const trackerObj = tracker.toJSON();
+
     res.status(200).json({
       status: "success",
       data: {
-        ...tracker.toObject(),
-        trackerName: tracker.name,
-        unit: tracker.unit,
-        target: tracker.target,
-        entries: tracker.entries,
+        ...trackerObj,
+        trackerName: trackerObj.name, // Safely decrypted string
       },
     });
   } catch (err) {
@@ -86,14 +85,14 @@ router.post("/", auth, async (req, res) => {
     });
 
     const savedTracker = await tracker.save();
-    return res.status(201).json(savedTracker);
+    return res.status(201).json(savedTracker.toJSON());
   } catch (err) {
     console.error("Tracker creation error:", err.message);
     return res.status(400).json({ message: "Failed to create tracker.", error: err.message });
   }
 });
 
-// --- NEW: Dedicated Endpoint to Add an Entry Permanently ---
+// Add an Entry to Tracker
 router.post("/:id/entries", auth, async (req, res) => {
   try {
     const userId = getUserId(req);
@@ -108,33 +107,25 @@ router.post("/:id/entries", auth, async (req, res) => {
       return res.status(404).json({ message: "Tracker not found or unauthorized." });
     }
 
-    // Safely extract existing encrypted entries and decrypt them in-memory
-    let currentEntries = [];
-    if (tracker.entries) {
-      let rawEntries = tracker.entries;
-      if (typeof rawEntries === "string" && rawEntries.startsWith("U2FsdGVkX1")) {
-        try {
-          const bytes = CryptoJS.AES.decrypt(rawEntries, SECRET_KEY);
-          const decryptedStr = bytes.toString(CryptoJS.enc.Utf8);
-          rawEntries = JSON.parse(decryptedStr);
-        } catch (e) {
-          rawEntries = [];
-        }
-      }
-      currentEntries = Array.isArray(rawEntries) ? rawEntries : [];
-    }
+    // Use .toJSON() to get the decrypted JS entries array automatically
+    const trackerObj = tracker.toJSON();
+    let currentEntries = Array.isArray(trackerObj.entries) ? trackerObj.entries : [];
 
-    // Push the new interaction entry sent from frontend
+    // Push new entry payload
     currentEntries.push(req.body);
-    tracker.entries = currentEntries;
 
-    const updatedTracker = await tracker.save(); // Triggers pre-save encryption automatically
+    // Update entries and mark field modified for Mongoose mixed-type tracking
+    tracker.entries = currentEntries;
+    tracker.markModified("entries");
+
+    const updatedTracker = await tracker.save(); // Pre-save handles encryption automatically
+    const updatedObj = updatedTracker.toJSON();
 
     res.status(200).json({
       status: "success",
       data: {
-        ...updatedTracker.toObject(),
-        trackerName: updatedTracker.name,
+        ...updatedObj,
+        trackerName: updatedObj.name,
       },
     });
   } catch (err) {
@@ -143,7 +134,7 @@ router.post("/:id/entries", auth, async (req, res) => {
   }
 });
 
-// Update tracker details (Name, Color, Target, etc.)
+// Update tracker details
 router.put("/:id", auth, async (req, res) => {
   try {
     const userId = getUserId(req);
@@ -165,15 +156,19 @@ router.put("/:id", auth, async (req, res) => {
     if (req.body.color !== undefined) tracker.color = req.body.color;
     if (req.body.target !== undefined) tracker.target = req.body.target;
     if (req.body.unit !== undefined) tracker.unit = req.body.unit;
-    if (req.body.entries !== undefined) tracker.entries = req.body.entries;
+    if (req.body.entries !== undefined) {
+      tracker.entries = req.body.entries;
+      tracker.markModified("entries");
+    }
 
     const updatedTracker = await tracker.save();
+    const updatedObj = updatedTracker.toJSON();
 
     res.status(200).json({
       status: "success",
       data: {
-        ...updatedTracker.toObject(),
-        trackerName: updatedTracker.name,
+        ...updatedObj,
+        trackerName: updatedObj.name,
       },
     });
   } catch (err) {
