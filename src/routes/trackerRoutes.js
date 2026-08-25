@@ -18,7 +18,6 @@ router.get("/", auth, async (req, res) => {
     if (!userId) return res.status(401).json({ message: "Unauthorized: Invalid user session." });
 
     const trackers = await Tracker.find({ userId }).sort({ createdAt: -1 });
-    // res.json automatically invokes .toJSON() on all model instances, decrypting fields safely
     res.json(trackers);
   } catch (err) {
     res.status(500).json({ message: "Error retrieving trackers.", error: err.message });
@@ -36,20 +35,14 @@ router.get("/:id", auth, async (req, res) => {
     }
 
     const tracker = await Tracker.findOne({ _id: id, userId });
-
     if (!tracker) {
       return res.status(404).json({ message: "Tracker not found or unauthorized." });
     }
 
-    // Convert to JSON first so schema transforms decrypt all properties safely
     const trackerObj = tracker.toJSON();
-
     res.status(200).json({
-      status: "success",
-      data: {
-        ...trackerObj,
-        trackerName: trackerObj.name, // Safely decrypted string
-      },
+      ...trackerObj,
+      trackerName: trackerObj.name,
     });
   } catch (err) {
     res.status(500).json({ message: "Server error", error: err.message });
@@ -107,26 +100,20 @@ router.post("/:id/entries", auth, async (req, res) => {
       return res.status(404).json({ message: "Tracker not found or unauthorized." });
     }
 
-    // Use .toJSON() to get the decrypted JS entries array automatically
     const trackerObj = tracker.toJSON();
     let currentEntries = Array.isArray(trackerObj.entries) ? trackerObj.entries : [];
-
-    // Push new entry payload
     currentEntries.push(req.body);
 
-    // Update entries and mark field modified for Mongoose mixed-type tracking
     tracker.entries = currentEntries;
     tracker.markModified("entries");
 
-    const updatedTracker = await tracker.save(); // Pre-save handles encryption automatically
+    const updatedTracker = await tracker.save();
     const updatedObj = updatedTracker.toJSON();
 
+    // Return flat object so frontend state updates cleanly
     res.status(200).json({
-      status: "success",
-      data: {
-        ...updatedObj,
-        trackerName: updatedObj.name,
-      },
+      ...updatedObj,
+      trackerName: updatedObj.name,
     });
   } catch (err) {
     console.error("Failed to add entry:", err);
@@ -145,7 +132,6 @@ router.put("/:id", auth, async (req, res) => {
     }
 
     const tracker = await Tracker.findOne({ _id: id, userId });
-
     if (!tracker) {
       return res.status(404).json({ message: "Tracker not found or unauthorized." });
     }
@@ -175,12 +161,10 @@ router.put("/:id", auth, async (req, res) => {
     const updatedTracker = await tracker.save();
     const updatedObj = updatedTracker.toJSON();
 
+    // Return flat object so frontend state updates cleanly
     res.status(200).json({
-      status: "success",
-      data: {
-        ...updatedObj,
-        trackerName: updatedObj.name,
-      },
+      ...updatedObj,
+      trackerName: updatedObj.name,
     });
   } catch (err) {
     console.error("Failed to update tracker:", err);
