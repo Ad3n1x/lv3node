@@ -80,7 +80,7 @@ router.post("/", auth, async (req, res) => {
       color,
       target,
       unit,
-      entries: Array.isArray(entries) ? entries : [],
+      entries: entries !== undefined ? entries : [],
     });
 
     const savedTracker = await tracker.save();
@@ -111,11 +111,13 @@ router.post("/:id/entries", auth, async (req, res) => {
       return res.status(400).json({ message: "Entry data cannot be empty." });
     }
 
-    // Direct Mongoose document array manipulation
-    if (!Array.isArray(tracker.entries)) {
-      tracker.entries = [];
+    // Support both direct array manipulation and encrypted payload strings
+    if (Array.isArray(tracker.entries)) {
+      tracker.entries.push(req.body);
+    } else {
+      // Fallback if entries is stored as mixed/string data
+      tracker.entries = req.body;
     }
-    tracker.entries.push(req.body);
     tracker.markModified("entries");
 
     const updatedTracker = await tracker.save();
@@ -152,16 +154,14 @@ router.put("/:id", auth, async (req, res) => {
     if (body.target !== undefined) tracker.target = body.target;
     if (body.unit !== undefined) tracker.unit = body.unit;
 
-    // Direct entry updates
-    if (!Array.isArray(tracker.entries)) {
-      tracker.entries = [];
-    }
-
+    // Handle encrypted string payloads or traditional array updates safely
     if (body.entries !== undefined) {
-      tracker.entries = Array.isArray(body.entries) ? body.entries : [body.entries];
+      tracker.entries = body.entries;
     } else if (body.entry !== undefined) {
+      if (!Array.isArray(tracker.entries)) tracker.entries = [];
       tracker.entries.push(body.entry);
     } else if (body.newEntry !== undefined) {
+      if (!Array.isArray(tracker.entries)) tracker.entries = [];
       tracker.entries.push(body.newEntry);
     }
 
