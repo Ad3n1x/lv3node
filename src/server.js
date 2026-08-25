@@ -5,7 +5,6 @@ const auth = require("./middleware/auth");
 
 const router = express.Router();
 
-// 🛡️ Helper: Safely extracts user ID from any JWT payload structure
 const getUserId = (req) => {
   if (!req.user) return null;
   return req.user.id || req.user._id || req.user.userId || (typeof req.user === "string" ? req.user : null);
