@@ -37,7 +37,6 @@ router.get("/:id", auth, async (req, res) => {
       return res.status(404).json({ message: "Tracker not found or unauthorized." });
     }
 
-    // Returns full tracker details along with decrypted entries
     res.status(200).json({
       status: "success",
       data: {
@@ -99,7 +98,6 @@ router.put("/:id", auth, async (req, res) => {
       return res.status(404).json({ message: "Tracker not found or unauthorized." });
     }
 
-    // Safely update fields if provided
     if (req.body.name !== undefined) tracker.name = req.body.name;
     if (req.body.type !== undefined) tracker.type = req.body.type;
     if (req.body.icon !== undefined) tracker.icon = req.body.icon;
@@ -108,7 +106,6 @@ router.put("/:id", auth, async (req, res) => {
     if (req.body.unit !== undefined) tracker.unit = req.body.unit;
     if (req.body.entries !== undefined) tracker.entries = req.body.entries;
 
-    // .save() ensures Mongoose schema hooks, validation, and encryption run properly
     const updatedTracker = await tracker.save();
 
     res.status(200).json({

@@ -1,14 +1,20 @@
 const express = require("express");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
 const { Resend } = require("resend");
 const User = require("../models/User");
-const verifyToken = require("../middleware/auth"); // 👈 Ensure you import your auth middleware
+const verifyToken = require("../middleware/auth");
+const { sendPasswordResetEmail } = require("../config/mailer");
 
 const router = express.Router();
 
 // Initialize Resend with your environment variable (Secure!)
 const resend = new Resend(process.env.RESEND_API_KEY);
+
+// ==========================================
+// 1. REGISTRATION & OTP VERIFICATION
+// ==========================================
 
 // POST /api/v1/auth/register (Step 1: Save unverified user & send OTP)
 router.post("/register", async (req, res) => {
@@ -149,6 +155,11 @@ router.post("/verify-otp", async (req, res) => {
   }
 });
 
+
+// ==========================================
+// 2. LOGIN & PUBLIC KEY SYNC
+// ==========================================
+
 // POST /api/v1/auth/login
 router.post("/login", async (req, res) => {
   try {
@@ -163,7 +174,6 @@ router.post("/login", async (req, res) => {
 
     const user = await User.findOne({ email: cleanEmail });
     if (!user) {
-      // 👈 Fixed the typo here from `res.path ? null : res.status(401)...`
       return res.status(401).json({ message: "Invalid email or password." });
     }
 
@@ -192,7 +202,7 @@ router.post("/login", async (req, res) => {
   }
 });
 
-// POST /api/v1/auth/public-key (👈 NEW: Syncs the client's E2EE public key)
+// POST /api/v1/auth/public-key (Syncs the client's E2EE public key)
 router.post("/public-key", verifyToken, async (req, res) => {
   try {
     const { publicKey } = req.body;
@@ -204,6 +214,81 @@ router.post("/public-key", verifyToken, async (req, res) => {
     return res.status(200).json({ message: "Public key saved successfully." });
   } catch (err) {
     return res.status(500).json({ message: err.message || "Failed to save public key." });
+  }
+});
+
+
+// ==========================================
+// 3. PASSWORD RECOVERY (FORGOT / RESET)
+// ==========================================
+
+// POST /api/v1/auth/forgot-password
+router.post("/forgot-password", async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ error: "Email is required." });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    const user = await User.findOne({ email: cleanEmail });
+    
+    // Security: return 200 even if not found to prevent user enumeration
+    if (!user) {
+      return res.status(200).json({ message: "If that email exists, a reset link has been sent." });
+    }
+
+    const resetToken = crypto.randomBytes(32).toString("hex");
+    user.resetPasswordToken = crypto.createHash("sha256").update(resetToken).digest("hex");
+    user.resetPasswordExpires = Date.now() + 15 * 60 * 1000; // 15 minutes
+    await user.save();
+
+    const resetUrl = `https://your-frontend-app.com/reset-password?token=${resetToken}&email=${cleanEmail}`;
+
+    const emailResult = await sendPasswordResetEmail(user.email, resetUrl);
+    
+    if (!emailResult.success) {
+      return res.status(500).json({ error: "Failed to send reset email. Please try again later." });
+    }
+
+    res.status(200).json({ message: "Password reset link sent successfully." });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Server error processing password reset." });
+  }
+});
+
+// POST /api/v1/auth/reset-password
+router.post("/reset-password", async (req, res) => {
+  try {
+    const { email, token, newPassword } = req.body;
+    
+    if (!email || !token || !newPassword) {
+      return res.status(400).json({ error: "All fields are required." });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
+    
+    const user = await User.findOne({
+      email: cleanEmail,
+      resetPasswordToken: hashedToken,
+      resetPasswordExpires: { $gt: Date.now() },
+    });
+
+    if (!user) {
+      return res.status(400).json({ error: "Invalid or expired password reset token." });
+    }
+
+    user.password = await bcrypt.hash(newPassword.trim(), 10);
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpires = undefined;
+    await user.save();
+
+    res.status(200).json({ message: "Password updated successfully. You can now log in." });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to reset password." });
   }
 });
 
