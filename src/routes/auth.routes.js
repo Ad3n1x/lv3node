@@ -63,7 +63,7 @@ router.post("/register", async (req, res) => {
       console.warn("⚠️ Warning: RESEND_API_KEY is missing. OTP email could not be sent.");
     } else {
       await resend.emails.send({
-        from: "Tracker App <onboarding@resend.dev>",
+        from: "Tracker App <onboarding@uni.track.com>",
         to: [cleanEmail],
         subject: "🔐 Your Verification Code — Tracker App",
         html: `
@@ -255,7 +255,7 @@ router.post("/forgot-password", async (req, res) => {
     if (process.env.RESEND_API_KEY) {
       try {
         await resend.emails.send({
-          from: "Tracker App <onboarding@resend.dev>",
+          from: "Tracker App <onboarding@uni.track.com>",
           to: [cleanEmail],
           subject: "🔒 Password Reset Code — Tracker App",
           html: `
