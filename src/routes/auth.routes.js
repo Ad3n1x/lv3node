@@ -17,6 +17,7 @@ const router = express.Router();
 
 // ==========================================
 // SECURITY RATE LIMITERS (Brute-Force Protection)
+// NOTE: Make sure `app.set("trust proxy", 1);` is enabled in your main server.js
 // ==========================================
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -41,6 +42,7 @@ const transporter = nodemailer.createTransport({
   host: "smtp.gmail.com",
   port: 587,
   secure: false, // STARTTLS
+  family: 4,     // FORCES IPv4 ONLY (Bypasses IPv6 ENETUNREACH on Render)
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS, // 16-character App Password
