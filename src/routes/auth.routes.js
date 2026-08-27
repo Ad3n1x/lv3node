@@ -1,27 +1,22 @@
 const express = require("express");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-const nodemailer = require("nodemailer");
-const dns = require("dns");
 const rateLimit = require("express-rate-limit");
+const { BrevoClient } = require("@getbrevo/brevo");
 const User = require("../models/User");
 const verifyToken = require("../middleware/auth");
-
-// 1. HARD-FORCE IPv4 AT THE DNS LEVEL
-if (dns.setDefaultResultOrder) {
-  dns.setDefaultResultOrder("ipv4first");
-}
-
-// Custom lookup function that strictly filters out IPv6 AAAA record lookups
-const ipv4Lookup = (hostname, options, callback) => {
-  return dns.lookup(hostname, { family: 4 }, callback);
-};
 
 const router = express.Router();
 
 // ==========================================
+// BREVO HTTP API CLIENT INITIALIZATION
+// ==========================================
+const brevo = new BrevoClient({
+  apiKey: process.env.BREVO_API_KEY,
+});
+
+// ==========================================
 // SECURITY RATE LIMITERS (Brute-Force Protection)
-// NOTE: Make sure `app.set("trust proxy", 1);` is set in your main server.js
 // ==========================================
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -40,50 +35,16 @@ const otpLimiter = rateLimit({
 });
 
 // ==========================================
-// HARDENED NODEMAILER TRANSPORTER SETUP
+// HELPER: RETRY LOGIC FOR EMAIL DELIVERY (BREVO HTTP API)
 // ==========================================
-const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 587,
-  secure: false, // STARTTLS
-  lookup: ipv4Lookup, // HARD-FORCES IPv4 LOOKUP (Prevents ENETUNREACH 2607:f8b0... errors)
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS, // 16-character App Password
-  },
-  // Generous timeouts to withstand cloud latency spikes
-  connectionTimeout: 20000, // 20 seconds
-  greetingTimeout: 20000,   // 20 seconds
-  socketTimeout: 30000,     // 30 seconds
-  pool: true,               // Keep connections open for faster delivery
-  maxConnections: 3,
-  maxMessages: 100,
-});
-
-// Verify SMTP connection state on app startup
-transporter.verify((error) => {
-  if (error) {
-    console.error("❌ [SMTP Error] Connection failed:", error.message);
-  } else {
-    console.log("🚀 [SMTP Success] Transporter verified over IPv4 via Port 587 (STARTTLS).");
-  }
-});
-
-// ==========================================
-// HELPER: RETRY LOGIC FOR EMAIL DELIVERY
-// ==========================================
-/**
- * Sends mail with automatic exponential backoff retry.
- * Prevents transient socket drops from losing OTPs.
- */
-const sendMailWithRetry = async (mailOptions, retries = 3, delay = 2000) => {
+const sendBrevoMailWithRetry = async (emailParams, retries = 3, delay = 2000) => {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      const info = await transporter.sendMail(mailOptions);
-      console.log(`✅ [Email Sent] MessageId: ${info.messageId} (Attempt ${attempt})`);
-      return info;
+      const response = await brevo.transactionalEmails.sendTransacEmail(emailParams);
+      console.log(`✅ [Email Sent via Brevo] MessageId: ${response.messageId} (Attempt ${attempt})`);
+      return response;
     } catch (err) {
-      console.warn(`⚠️ [Email Attempt ${attempt}/${retries} Failed]: ${err.message}`);
+      console.warn(`⚠️ [Email Attempt ${attempt}/${retries} Failed]: ${err.message || err}`);
       if (attempt === retries) throw err;
       await new Promise((resolve) => setTimeout(resolve, delay * attempt));
     }
@@ -91,20 +52,23 @@ const sendMailWithRetry = async (mailOptions, retries = 3, delay = 2000) => {
 };
 
 // ==========================================
-// HELPER: BACKGROUND OTP MAILER
+// HELPER: BACKGROUND OTP MAILER VIA BREVO API
 // ==========================================
 const sendOtpEmail = async (toEmail, firstName, otp, subjectTitle) => {
-  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-    console.warn("⚠️ [Config Warning] EMAIL_USER or EMAIL_PASS missing in environment.");
+  if (!process.env.BREVO_API_KEY || !process.env.SENDER_EMAIL) {
+    console.warn("⚠️ [Config Warning] BREVO_API_KEY or SENDER_EMAIL missing in environment.");
     console.log(`🔑 [DEV MODE OTP] Destination: ${toEmail} | Code: ${otp}`);
     return;
   }
 
-  const mailOptions = {
-    from: `"UNI-TRACK Security" <${process.env.EMAIL_USER}>`,
-    to: toEmail,
+  const emailParams = {
     subject: subjectTitle,
-    html: `
+    sender: {
+      name: process.env.SENDER_NAME || "UNI-TRACK Security",
+      email: process.env.SENDER_EMAIL,
+    },
+    to: [{ email: toEmail, name: firstName }],
+    htmlContent: `
       <div style="background-color: #f8f9fa; padding: 40px 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;">
         <div style="max-width: 480px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.05); border: 1px solid #e9ecef;">
           <div style="background: linear-gradient(135deg, #0d6efd 0%, #0a58ca 100%); padding: 30px; text-align: center; color: #ffffff;">
@@ -133,9 +97,9 @@ const sendOtpEmail = async (toEmail, firstName, otp, subjectTitle) => {
     `,
   };
 
-  // Dispatch asynchronously without blocking API response execution
-  sendMailWithRetry(mailOptions).catch((err) => {
-    console.error(`❌ [Critical Email Failure] Failed to send OTP to ${toEmail}:`, err.stack);
+  // Non-blocking asynchronous dispatch
+  sendBrevoMailWithRetry(emailParams).catch((err) => {
+    console.error(`❌ [Critical Email Failure] Failed to send OTP via Brevo to ${toEmail}:`, err.stack || err);
   });
 };
 
@@ -191,7 +155,7 @@ router.post("/register", authLimiter, async (req, res) => {
       });
     }
 
-    // Trigger email in background
+    // Trigger email via Brevo HTTP API
     sendOtpEmail(cleanEmail, firstName, otp, "🔐 Your Verification Code — UNI-TRACK");
 
     return res.status(200).json({
@@ -364,7 +328,7 @@ router.post("/forgot-password", otpLimiter, async (req, res) => {
     user.otpExpires = otpExpires;
     await user.save();
 
-    // Trigger email in background
+    // Trigger email via Brevo HTTP API
     sendOtpEmail(cleanEmail, user.firstName, otp, "🔒 Password Reset Code — UNI-TRACK");
 
     return res.status(200).json({ message: "Password reset code sent to your email." });
