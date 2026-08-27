@@ -7,11 +7,15 @@ const verifyToken = require("../middleware/auth");
 
 const router = express.Router();
 
-// Initialize Nodemailer Transporter using Gmail SMTP
+// Initialize Nodemailer Transporter using Gmail SMTP (Forced IPv4 + Timeouts)
 const transporter = nodemailer.createTransport({
   host: "smtp.gmail.com",
   port: 465,
   secure: true, // SSL required on cloud platforms like Render
+  family: 4,    // Force IPv4 to prevent ENETUNREACH errors on Render
+  connectionTimeout: 5000, // 5 seconds connection limit
+  greetingTimeout: 5000,   // 5 seconds greeting limit
+  socketTimeout: 10000,    // 10 seconds data transfer limit
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS, // 16-character App Password
@@ -108,11 +112,9 @@ router.post("/register", async (req, res) => {
       });
     }
 
-    try {
-      await sendOtpEmail(cleanEmail, firstName.trim(), otp, "🔐 Your Verification Code — UNI-TRACK");
-    } catch (emailErr) {
-      console.error("⚠️ Nodemailer Delivery Warning:", emailErr.message);
-    }
+    // Fire email in background without blocking API response
+    sendOtpEmail(cleanEmail, firstName.trim(), otp, "🔐 Your Verification Code — UNI-TRACK")
+      .catch((emailErr) => console.error("⚠️ Background Nodemailer Warning:", emailErr.message));
 
     return res.status(200).json({
       message: "Registration successful! Please check your email for the OTP.",
@@ -270,11 +272,9 @@ router.post("/forgot-password", async (req, res) => {
     user.otpExpires = otpExpires;
     await user.save();
 
-    try {
-      await sendOtpEmail(cleanEmail, user.firstName, otp, "🔒 Password Reset Code — UNI-TRACK");
-    } catch (emailErr) {
-      console.error("⚠️ Nodemailer Error:", emailErr.message);
-    }
+    // Fire email in background without blocking API response
+    sendOtpEmail(cleanEmail, user.firstName, otp, "🔒 Password Reset Code — UNI-TRACK")
+      .catch((emailErr) => console.error("⚠️ Background Nodemailer Warning:", emailErr.message));
 
     return res.status(200).json({ message: "Password reset code sent to your email." });
   } catch (err) {
