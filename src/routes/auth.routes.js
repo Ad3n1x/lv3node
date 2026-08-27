@@ -1,17 +1,69 @@
 const express = require("express");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-const { Resend } = require("resend");
+const nodemailer = require("nodemailer");
 const User = require("../models/User");
 const verifyToken = require("../middleware/auth");
 
 const router = express.Router();
 
-// Initialize Resend safely
-const resend = new Resend(process.env.RESEND_API_KEY);
+// Initialize Nodemailer Transporter using Gmail SMTP
+const transporter = nodemailer.createTransport({
+  host: "smtp.gmail.com",
+  port: 465,
+  secure: true, // SSL required on cloud platforms like Render
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS, // 16-character App Password
+  },
+});
+
+// Helper function to send OTP email
+const sendOtpEmail = async (toEmail, firstName, otp, subjectTitle) => {
+  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+    console.warn("⚠️ Warning: EMAIL_USER or EMAIL_PASS missing. Email skipped.");
+    console.log(`🔑 DEVELOPMENT OTP for ${toEmail}: ${otp}`);
+    return;
+  }
+
+  const mailOptions = {
+    from: `"UNI-TRACK Security" <${process.env.EMAIL_USER}>`,
+    to: toEmail,
+    subject: subjectTitle,
+    html: `
+      <div style="background-color: #f8f9fa; padding: 40px 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;">
+        <div style="max-width: 480px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.05); border: 1px solid #e9ecef;">
+          <div style="background: linear-gradient(135deg, #0d6efd 0%, #0a58ca 100%); padding: 30px; text-align: center; color: #ffffff;">
+            <h1 style="margin: 0; font-size: 24px; font-weight: 700; letter-spacing: 0.5px;">UNI-TRACK</h1>
+            <p style="margin: 8px 0 0 0; font-size: 14px; opacity: 0.9;">Secure Account Verification</p>
+          </div>
+          <div style="padding: 35px 30px; text-align: left; color: #495057;">
+            <p style="margin-top: 0; font-size: 16px; font-weight: 500;">Hello <strong>${firstName}</strong>,</p>
+            <p style="font-size: 15px; line-height: 1.5; color: #6c757d;">
+              Use the secure verification code below to verify your account action. This code is valid for <strong>10 minutes</strong>.
+            </p>
+            <div style="margin: 30px 0; text-align: center;">
+              <div style="display: inline-block; background-color: #f1f3f5; border: 2px dashed #ced4da; border-radius: 8px; padding: 15px 30px; font-size: 32px; font-weight: 800; letter-spacing: 6px; color: #0d6efd;">
+                ${otp}
+              </div>
+            </div>
+            <p style="font-size: 13px; color: #adb5bd; line-height: 1.4; margin-bottom: 0;">
+              If you didn't request this code, you can safely ignore this email.
+            </p>
+          </div>
+          <div style="background-color: #f8f9fa; padding: 15px 30px; text-align: center; font-size: 12px; color: #adb5bd; border-top: 1px solid #e9ecef;">
+            &copy; ${new Date().getFullYear()} UNI-TRACK. All rights reserved.
+          </div>
+        </div>
+      </div>
+    `,
+  };
+
+  return await transporter.sendMail(mailOptions);
+};
 
 // ==========================================
-// 1. POST /api/v1/auth/register (Save unverified user & send OTP)
+// 1. POST /api/v1/auth/register
 // ==========================================
 router.post("/register", async (req, res) => {
   try {
@@ -34,8 +86,6 @@ router.post("/register", async (req, res) => {
     }
 
     const hashedPassword = await bcrypt.hash(cleanPassword, 10);
-
-    // Generate 6-digit OTP and expiration (10 minutes from now)
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
 
@@ -58,42 +108,10 @@ router.post("/register", async (req, res) => {
       });
     }
 
-    // Check if Resend API key is configured before sending email
-    if (!process.env.RESEND_API_KEY) {
-      console.warn("⚠️ Warning: RESEND_API_KEY is missing. OTP email could not be sent.");
-    } else {
-      await resend.emails.send({
-        from: "Tracker App <onboarding@uni.track.com>",
-        to: [cleanEmail],
-        subject: "🔐 Your Verification Code — Tracker App",
-        html: `
-          <div style="background-color: #f8f9fa; padding: 40px 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;">
-            <div style="max-width: 480px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.05); border: 1px solid #e9ecef;">
-              <div style="background: linear-gradient(135deg, #0d6efd 0%, #0a58ca 100%); padding: 30px; text-align: center; color: #ffffff;">
-                <h1 style="margin: 0; font-size: 24px; font-weight: 700; letter-spacing: 0.5px;">Tracker App</h1>
-                <p style="margin: 8px 0 0 0; font-size: 14px; opacity: 0.9;">Secure Account Verification</p>
-              </div>
-              <div style="padding: 35px 30px; text-align: left; color: #495057;">
-                <p style="margin-top: 0; font-size: 16px; font-weight: 500;">Hello <strong>${firstName}</strong>,</p>
-                <p style="font-size: 15px; line-height: 1.5; color: #6c757d;">
-                  Thank you for signing up! Use the secure verification code below to activate your account. This code is valid for <strong>10 minutes</strong>.
-                </p>
-                <div style="margin: 30px 0; text-align: center;">
-                  <div style="display: inline-block; background-color: #f1f3f5; border: 2px dashed #ced4da; border-radius: 8px; padding: 15px 30px; font-size: 32px; font-weight: 800; letter-spacing: 6px; color: #0d6efd;">
-                    ${otp}
-                  </div>
-                </div>
-                <p style="font-size: 13px; color: #adb5bd; line-height: 1.4; margin-bottom: 0;">
-                  If you didn't request this code, you can safely ignore this email.
-                </p>
-              </div>
-              <div style="background-color: #f8f9fa; padding: 15px 30px; text-align: center; font-size: 12px; color: #adb5bd; border-top: 1px solid #e9ecef;">
-                &copy; ${new Date().getFullYear()} Tracker App. All rights reserved.
-              </div>
-            </div>
-          </div>
-        `,
-      });
+    try {
+      await sendOtpEmail(cleanEmail, firstName.trim(), otp, "🔐 Your Verification Code — UNI-TRACK");
+    } catch (emailErr) {
+      console.error("⚠️ Nodemailer Delivery Warning:", emailErr.message);
     }
 
     return res.status(200).json({
@@ -229,7 +247,7 @@ router.post("/public-key", verifyToken, async (req, res) => {
 });
 
 // ==========================================
-// 5. POST /api/v1/auth/forgot-password (Sends reset OTP)
+// 5. POST /api/v1/auth/forgot-password
 // ==========================================
 router.post("/forgot-password", async (req, res) => {
   try {
@@ -246,35 +264,16 @@ router.post("/forgot-password", async (req, res) => {
     }
 
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+    const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
 
     user.otp = otp;
     user.otpExpires = otpExpires;
     await user.save();
 
-    if (process.env.RESEND_API_KEY) {
-      try {
-        await resend.emails.send({
-          from: "Tracker App <onboarding@uni.track.com>",
-          to: [cleanEmail],
-          subject: "🔒 Password Reset Code — Tracker App",
-          html: `
-            <div style="background-color: #f8f9fa; padding: 30px; font-family: sans-serif;">
-              <div style="max-width: 440px; margin: 0 auto; background: #fff; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.05);">
-                <h2 style="color: #0d6efd; margin-top: 0;">Password Reset</h2>
-                <p style="color: #495057;">Use the code below to reset your password. It is valid for 10 minutes.</p>
-                <div style="text-align: center; margin: 25px 0;">
-                  <span style="background: #f1f3f5; padding: 12px 24px; font-size: 28px; font-weight: bold; letter-spacing: 6px; color: #0d6efd; border-radius: 6px; border: 1px dashed #ced4da;">${otp}</span>
-                </div>
-                <p style="font-size: 12px; color: #adb5bd; margin-bottom: 0;">If you didn't request this, ignore this email.</p>
-              </div>
-            </div>
-          `,
-        });
-      } catch (emailErr) {
-        console.error("⚠️ Resend Error:", emailErr.message);
-        console.log(`🔑 FALLBACK RESET OTP for ${cleanEmail}: ${otp}`);
-      }
+    try {
+      await sendOtpEmail(cleanEmail, user.firstName, otp, "🔒 Password Reset Code — UNI-TRACK");
+    } catch (emailErr) {
+      console.error("⚠️ Nodemailer Error:", emailErr.message);
     }
 
     return res.status(200).json({ message: "Password reset code sent to your email." });
@@ -285,7 +284,7 @@ router.post("/forgot-password", async (req, res) => {
 });
 
 // ==========================================
-// 6. POST /api/v1/auth/reset-password (Verifies OTP & updates password)
+// 6. POST /api/v1/auth/reset-password
 // ==========================================
 router.post("/reset-password", async (req, res) => {
   try {
