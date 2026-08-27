@@ -7,17 +7,21 @@ const rateLimit = require("express-rate-limit");
 const User = require("../models/User");
 const verifyToken = require("../middleware/auth");
 
-// 1. FORCE IPv4 DNS RESOLUTION GLOBALLY
-// Fixes Render's IPv6 ENETUNREACH / ETIMEDOUT network issues
+// 1. HARD-FORCE IPv4 AT THE DNS LEVEL
 if (dns.setDefaultResultOrder) {
   dns.setDefaultResultOrder("ipv4first");
 }
+
+// Custom lookup function that strictly filters out IPv6 AAAA record lookups
+const ipv4Lookup = (hostname, options, callback) => {
+  return dns.lookup(hostname, { family: 4 }, callback);
+};
 
 const router = express.Router();
 
 // ==========================================
 // SECURITY RATE LIMITERS (Brute-Force Protection)
-// NOTE: Make sure `app.set("trust proxy", 1);` is enabled in your main server.js
+// NOTE: Make sure `app.set("trust proxy", 1);` is set in your main server.js
 // ==========================================
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -42,7 +46,7 @@ const transporter = nodemailer.createTransport({
   host: "smtp.gmail.com",
   port: 587,
   secure: false, // STARTTLS
-  family: 4,     // FORCES IPv4 ONLY (Bypasses IPv6 ENETUNREACH on Render)
+  lookup: ipv4Lookup, // HARD-FORCES IPv4 LOOKUP (Prevents ENETUNREACH 2607:f8b0... errors)
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS, // 16-character App Password

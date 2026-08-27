@@ -1,6 +1,7 @@
 require("dotenv").config();
 const dns = require("dns");
 const express = require("express");
+app.set("trust proxy", 1);
 const mongoose = require("mongoose");
 const cors = require("cors");
 const cron = require("node-cron");
