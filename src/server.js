@@ -1,17 +1,23 @@
 require("dotenv").config();
 const dns = require("dns");
 const express = require("express");
-app.set("trust proxy", 1);
 const mongoose = require("mongoose");
 const cors = require("cors");
 const cron = require("node-cron");
 const webpush = require("web-push");
 
-const User = require("./models/User"); 
-const authRoutes = require("./routes/auth.routes");
+// 1. INITIALIZE EXPRESS APP FIRST
+const app = express();
+
+// 2. CONFIGURE TRUST PROXY BEFORE ANY MIDDLEWARE OR ROUTES
+app.set("trust proxy", 1);
+
+const User = require("./models/User");
+const authRoutes = require("./routes/auth.routes"); // Ensured route path matches auth.js
 const trackerRoutes = require("./routes/trackerRoutes");
 const verifyToken = require("./middleware/auth");
 
+// Fix DNS resolution for MongoDB Atlas SRV connection strings in restricted node environments
 if (
   process.env.MONGODB_URI &&
   process.env.MONGODB_URI.startsWith("mongodb+srv://")
@@ -23,12 +29,10 @@ if (
   }
 }
 
-const app = express();
-
-// Middleware & CORS Configuration (Fixed to accept live frontend & local environments)
+// Global Middlewares & CORS Configuration
 app.use(
   cors({
-    origin: true, // Dynamically allows any frontend origin making the request
+    origin: true, // Dynamically allow frontend origins
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
@@ -38,35 +42,39 @@ app.use(
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// 🔍 Global Request Logger (Tracks incoming requests & origins)
+// Global Request Logger
 app.use((req, res, next) => {
-  console.log(`📥 INCOMING REQUEST: ${req.method} ${req.originalUrl} from ${req.headers.origin || 'unknown origin'}`);
+  console.log(`📥 INCOMING REQUEST: ${req.method} ${req.originalUrl} from ${req.headers.origin || "unknown origin"}`);
   next();
 });
 
-// ✨ VAPID Configuration for Web Push
-const publicVapidKey = process.env.VAPID_PUBLIC_KEY || "YOUR_PUBLIC_VAPID_KEY";
-const privateVapidKey =
-  process.env.VAPID_PRIVATE_KEY || "YOUR_PRIVATE_VAPID_KEY";
+// VAPID Configuration for Web Push Notifications
+const publicVapidKey = process.env.VAPID_PUBLIC_KEY;
+const privateVapidKey = process.env.VAPID_PRIVATE_KEY;
 
-webpush.setVapidDetails(
-  "mailto:support@unitrack.com",
-  publicVapidKey,
-  privateVapidKey
-);
+if (publicVapidKey && privateVapidKey) {
+  webpush.setVapidDetails(
+    process.env.VAPID_SUBJECT || "mailto:support@unitrack.com",
+    publicVapidKey,
+    privateVapidKey
+  );
+} else {
+  console.warn("⚠️ [VAPID Warning] VAPID keys are missing from environment variables.");
+}
 
-// ✨ Push Subscription Schema & Model
+// Push Subscription Schema & Model
 const subscriptionSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-  subscription: Object,
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+  subscription: { type: Object, required: true },
 });
-const PushSubscription = mongoose.models.PushSubscription || mongoose.model("PushSubscription", subscriptionSchema);
+const PushSubscription =
+  mongoose.models.PushSubscription || mongoose.model("PushSubscription", subscriptionSchema);
 
 // Base & Health Routes
 app.get("/", (req, res) => {
   res.status(200).json({
     status: "success",
-    message: "API service is running.",
+    message: "Universal Tracker API service is operational.",
     health: "/health",
   });
 });
@@ -79,60 +87,58 @@ app.get("/health", (req, res) => res.status(200).send("OK"));
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/trackers", trackerRoutes);
 
-// ✨ Endpoint to save or update the authenticated user's E2EE public key
-app.post("/api/v1/users/public-key", verifyToken, async (req, res) => {
-  try {
-    const { publicKey } = req.body;
-    await User.findByIdAndUpdate(req.user.id, { publicKey });
-    res.status(200).json({ message: "Public key synchronized successfully" });
-  } catch (err) {
-    console.error("Failed to save public key:", err);
-    res.status(500).json({ error: "Failed to save public key" });
-  }
-});
-
-// ✨ Endpoint to save browser push subscription
+// Endpoint for Web Push Notification Subscriptions
 app.post("/api/v1/subscribe", verifyToken, async (req, res) => {
   try {
     const subscription = req.body;
+    if (!subscription || !subscription.endpoint) {
+      return res.status(400).json({ error: "Invalid subscription payload." });
+    }
+
     await PushSubscription.findOneAndUpdate(
       { userId: req.user.id },
       { subscription },
-      { upsert: true, new: true },
+      { upsert: true, new: true }
     );
-    res.status(201).json({ message: "Subscribed successfully" });
+    return res.status(201).json({ message: "Subscribed to push notifications successfully." });
   } catch (err) {
-    console.error("Failed to save subscription:", err);
-    res.status(500).json({ error: "Failed to save subscription" });
+    console.error("Failed to save push subscription:", err);
+    return res.status(500).json({ error: "Failed to save push subscription." });
   }
 });
 
-// Catch-all unmatched route logger
-app.use((req, res, next) => {
+// Catch-all Unmatched Route Logger (404 Handler)
+app.use((req, res) => {
   console.log(`⚠️ UNMATCHED ROUTE HIT: ${req.method} ${req.originalUrl}`);
   res.status(404).json({ message: `Route ${req.originalUrl} not found on this server.` });
 });
 
-// ✨ Cron job running daily at 8:00 PM to dispatch push alerts
+// Cron Job: Daily Push Notification Alert at 8:00 PM
 cron.schedule("0 20 * * *", async () => {
   try {
     const subs = await PushSubscription.find().populate("userId");
 
     const payload = JSON.stringify({
-      title: "Uni-Track Reminder 🔔",
-      body: "You haven't updated your trackers today! Keep your streak alive.",
+      title: "Universal Tracker Reminder 🔔",
+      body: "You haven't updated your daily trackers today! Log in to maintain your streak.",
     });
 
     for (const sub of subs) {
       await webpush.sendNotification(sub.subscription, payload).catch((err) => {
-        console.error("Error sending push notification:", err);
+        // Clear dead or expired subscriptions automatically
+        if (err.statusCode === 404 || err.statusCode === 410) {
+          PushSubscription.deleteOne({ _id: sub._id }).exec();
+        } else {
+          console.error("Error sending push notification:", err.message);
+        }
       });
     }
   } catch (error) {
-    console.error("Cron job error:", error);
+    console.error("Cron job execution error:", error);
   }
 });
 
+// Database Connection & Server Startup
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGODB_URI;
 
@@ -144,9 +150,10 @@ if (!MONGO_URI) {
 mongoose
   .connect(MONGO_URI)
   .then(() => {
-    console.log("Connected to MongoDB successfully");
-    app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+    console.log("✅ Connected to MongoDB successfully");
+    app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
   })
   .catch((err) => {
-    console.error("MongoDB connection error:", err);
+    console.error("❌ MongoDB connection error:", err);
+    process.exit(1);
   });
