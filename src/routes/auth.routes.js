@@ -383,4 +383,25 @@ router.post("/reset-password", authLimiter, async (req, res) => {
   }
 });
 
+// 3. Add a Backend Route to Fetch Current User Profile & Pro Status (routes/auth.routes.js or user.routes.js)
+// Ensures your React frontend can check `isPro` status instantly on load.
+
+router.get("/me", verifyToken, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select("-password");
+    if (!user) {
+      return res.status(404).json({ error: "User not found." });
+    }
+    res.json({
+      id: user._id,
+      email: user.email,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      isPro: user.isPro,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

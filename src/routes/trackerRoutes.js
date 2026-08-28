@@ -193,5 +193,19 @@ router.delete("/:id", auth, async (req, res) => {
     return res.status(500).json({ message: "Failed to delete tracker.", error: err.message });
   }
 });
+// 2. Protect Premium Backend Routes (routes/trackerRoutes.js)
+// Example of applying your `requirePro` middleware to limit certain actions to Pro users
+const requirePro = require("../middleware/requirePro");
+
+// Example: Restricting advanced exports or unlimited trackers
+router.post("/export-data", verifyToken, requirePro, async (req, res) => {
+  // Only accessible if user.isPro === true
+  try {
+    // ... export logic
+    res.json({ message: "Data exported successfully" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 module.exports = router;

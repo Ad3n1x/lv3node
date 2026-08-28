@@ -2,6 +2,7 @@ require("dotenv").config();
 const dns = require("dns");
 const express = require("express");
 const mongoose = require("mongoose");
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
 // Disable Mongoose command buffering globally to prevent hanging queries on DB connection issues
 mongoose.set("bufferCommands", false);
@@ -17,8 +18,9 @@ const app = express();
 app.set("trust proxy", 1);
 
 const User = require("./models/User");
-const authRoutes = require("./routes/auth.routes"); // Ensured route path matches auth.js
+const authRoutes = require("./routes/auth.routes");
 const trackerRoutes = require("./routes/trackerRoutes");
+const subscriptionRoutes = require("./routes/subscription");
 const verifyToken = require("./middleware/auth");
 
 // Fix DNS resolution for MongoDB Atlas SRV connection strings in restricted node environments
@@ -32,6 +34,39 @@ if (
     console.warn("Could not set custom DNS servers:", e.message);
   }
 }
+
+// Stripe Webhook Endpoint (Must be defined BEFORE express.json() middleware to preserve raw body buffer)
+app.post("/webhook", express.raw({ type: "application/json" }), async (req, res) => {
+  const sig = req.headers["stripe-signature"];
+  let event;
+
+  try {
+    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    console.error(`Webhook Signature Error: ${err.message}`);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  if (event.type === "checkout.session.completed") {
+    const session = event.data.object;
+    const userId = session.metadata?.userId;
+
+    if (userId) {
+      try {
+        await User.findByIdAndUpdate(userId, {
+          isPro: true,
+          subscriptionId: session.subscription,
+          stripeCustomerId: session.customer,
+        });
+        console.log(`✅ User ${userId} upgraded to Pro successfully.`);
+      } catch (err) {
+        console.error("Error updating user subscription status in DB:", err);
+      }
+    }
+  }
+
+  res.json({ received: true });
+});
 
 // Global Middlewares & CORS Configuration
 app.use(
@@ -90,6 +125,7 @@ app.get("/health", (req, res) => res.status(200).send("OK"));
 // ==========================================
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/trackers", trackerRoutes);
+app.use("/api/v1/subscription", subscriptionRoutes);
 
 // Endpoint for Web Push Notification Subscriptions
 app.post("/api/v1/subscribe", verifyToken, async (req, res) => {

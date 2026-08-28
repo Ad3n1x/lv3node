@@ -40,6 +40,10 @@ const userSchema = new mongoose.Schema(
     otp: { type: String },
     otpExpires: { type: Date },
     publicKey: { type: String },
+    // Subscription / Monetization fields
+    isPro: { type: Boolean, default: false },
+    subscriptionId: { type: String, default: null },
+    stripeCustomerId: { type: String, default: null },
   },
   { timestamps: true }
 );
