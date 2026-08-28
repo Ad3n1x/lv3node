@@ -24,6 +24,7 @@ const getTrackerEntries = async (req, res) => {
 
     return res.status(200).json({
       status: "success",
+      success: true, // Compatibility fallback
       data: {
         ...trackerObj, 
         trackerName: trackerObj.name,
@@ -31,6 +32,7 @@ const getTrackerEntries = async (req, res) => {
         target: trackerObj.target,
         entries: Array.isArray(trackerObj.entries) ? trackerObj.entries : [], 
       },
+      entries: Array.isArray(trackerObj.entries) ? trackerObj.entries : [], // Compatibility fallback
     });
   } catch (error) {
     console.error("Error in getTrackerEntries:", error);
@@ -62,6 +64,8 @@ const updateTracker = async (req, res) => {
       currentEntries.push(req.body.entry);
     } else if (req.body.entries) {
       currentEntries = req.body.entries;
+    } else if (Object.keys(req.body).length > 0 && (req.body.date !== undefined || req.body.value !== undefined)) {
+      currentEntries.push(req.body);
     } else {
       // Default fallback if body is empty for a habit
       currentEntries.push({ date: new Date().toISOString(), status: "completed" });
@@ -73,9 +77,17 @@ const updateTracker = async (req, res) => {
     // Use .save() instead of findOneAndUpdate so encryption works perfectly
     await tracker.save();
 
+    const trackerObj = tracker.toJSON();
+
     return res.status(200).json({
       status: "success",
-      data: tracker.toJSON(),
+      success: true,
+      data: {
+        ...trackerObj,
+        trackerName: trackerObj.name,
+        entries: trackerObj.entries || [],
+      },
+      ...trackerObj,
     });
   } catch (error) {
     console.error("Error updating tracker:", error);
