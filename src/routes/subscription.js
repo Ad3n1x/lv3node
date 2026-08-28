@@ -39,13 +39,19 @@ router.post("/create-checkout-session", verifyToken, async (req, res) => {
       console.log("✅ [CHECKOUT] Stripe customer created:", customerId);
     }
 
+    const priceId = process.env.STRIPE_PRO_PRICE_ID || process.env.STRIPE_PRICE_ID;
+    if (!priceId) {
+      console.error("❌ [CHECKOUT ERROR]: STRIPE_PRO_PRICE_ID is missing from environment variables!");
+      return res.status(500).json({ error: "Server configuration error: Stripe price ID is not set." });
+    }
+
     console.log("👉 [CHECKOUT] Creating Stripe checkout session...");
     const session = await stripe.checkout.sessions.create({
       customer: customerId,
       payment_method_types: ["card"],
       line_items: [
         {
-          price: process.env.STRIPE_PRICE_ID,
+          price: priceId,
           quantity: 1,
         },
       ],
