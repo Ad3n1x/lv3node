@@ -1,9 +1,52 @@
 const express = require("express");
 const mongoose = require("mongoose");
+const CryptoJS = require("crypto-js");
 const Tracker = require("../models/Tracker");
 const auth = require("../middleware/auth");
 
 const router = express.Router();
+
+// 🔑 Encryption secret sync (maps to ENCRYPTION_KEY in your .env file)
+const ENCRYPTION_SECRET = 
+  process.env.ENCRYPTION_KEY || 
+  process.env.ENCRYPTION_SECRET || 
+  process.env.CLIENT_SECRET || 
+  "your_client_side_encryption_secret";
+
+// 🔓 Helper: Safely decrypts string or object ciphertext fields
+const decryptData = (field) => {
+  if (!field) return field;
+  try {
+    // Handle object-based ciphertext from database ({ ciphertext, iv, encryptedKey })
+    if (typeof field === "object" && field.ciphertext) {
+      const options = field.iv ? { iv: CryptoJS.enc.Utf8.parse(field.iv) } : {};
+      const bytes = CryptoJS.AES.decrypt(field.ciphertext, ENCRYPTION_SECRET, options);
+      const decryptedStr = bytes.toString(CryptoJS.enc.Utf8);
+      if (decryptedStr) {
+        try {
+          return JSON.parse(decryptedStr);
+        } catch {
+          return !isNaN(decryptedStr) && decryptedStr !== "" ? Number(decryptedStr) : decryptedStr;
+        }
+      }
+    }
+    // Handle standard CryptoJS string ciphertext ("U2FsdGVkX1...")
+    if (typeof field === "string" && field.startsWith("U2FsdGVkX1")) {
+      const bytes = CryptoJS.AES.decrypt(field, ENCRYPTION_SECRET);
+      const decryptedStr = bytes.toString(CryptoJS.enc.Utf8);
+      if (decryptedStr) {
+        try {
+          return JSON.parse(decryptedStr);
+        } catch {
+          return !isNaN(decryptedStr) && decryptedStr !== "" ? Number(decryptedStr) : decryptedStr;
+        }
+      }
+    }
+  } catch (err) {
+    console.error("Decryption error:", err.message);
+  }
+  return field;
+};
 
 // 🛡️ Helper: Safely extracts user ID from any JWT payload structure
 const getUserId = (req) => {
@@ -11,12 +54,24 @@ const getUserId = (req) => {
   return req.user.id || req.user._id || req.user.userId || (typeof req.user === "string" ? req.user : null);
 };
 
-// 🛡️ Helper: Guarantees consistent tracker payload structure across all routes
+// 🛡️ Helper: Guarantees consistent tracker payload structure & decrypts encrypted fields
 const formatTracker = (trackerDoc) => {
-  const trackerObj = trackerDoc.toJSON();
+  const trackerObj = trackerDoc.toJSON ? trackerDoc.toJSON() : trackerDoc;
+  
+  const decryptedName = decryptData(trackerObj.name);
+  const decryptedEntries = decryptData(trackerObj.entries);
+  const decryptedType = decryptData(trackerObj.type);
+  const decryptedUnit = decryptData(trackerObj.unit);
+  const decryptedTarget = decryptData(trackerObj.target);
+
   return {
     ...trackerObj,
-    trackerName: trackerObj.name || trackerObj.trackerName || "",
+    name: decryptedName || "",
+    trackerName: decryptedName || trackerObj.trackerName || "",
+    type: decryptedType || trackerObj.type || "tracker",
+    unit: decryptedUnit !== undefined ? decryptedUnit : trackerObj.unit,
+    target: decryptedTarget !== undefined ? decryptedTarget : trackerObj.target,
+    entries: Array.isArray(decryptedEntries) ? decryptedEntries : (trackerObj.entries || []),
   };
 };
 
@@ -66,7 +121,7 @@ router.get("/:id", auth, async (req, res) => {
   }
 });
 
-// 🛠️ FIX 1: GET /api/v1/trackers/:id/entries (Resolves UNMATCHED ROUTE HIT error)
+// GET /api/v1/trackers/:id/entries
 router.get("/:id/entries", auth, async (req, res) => {
   try {
     const userId = getUserId(req);
@@ -82,10 +137,11 @@ router.get("/:id/entries", auth, async (req, res) => {
       return res.status(404).json({ success: false, message: "Tracker not found or unauthorized." });
     }
 
+    const formatted = formatTracker(tracker);
     return res.status(200).json({
       success: true,
-      data: tracker.entries || [],
-      entries: tracker.entries || [],
+      data: formatted.entries || [],
+      entries: formatted.entries || [],
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: "Failed to retrieve entries.", error: err.message });
@@ -176,7 +232,7 @@ router.post("/:id/entries", auth, async (req, res) => {
   }
 });
 
-// 🛠️ FIX 2: PUT /api/v1/trackers/:id/entries (Allows full entries array sync)
+// PUT /api/v1/trackers/:id/entries
 router.put("/:id/entries", auth, async (req, res) => {
   try {
     const userId = getUserId(req);
@@ -228,7 +284,6 @@ router.put("/:id", auth, async (req, res) => {
 
     const body = req.body || {};
 
-    // Standard field updates
     if (body.name !== undefined) tracker.name = typeof body.name === "string" ? body.name.trim() : body.name;
     if (body.type !== undefined) tracker.type = body.type;
     if (body.icon !== undefined) tracker.icon = body.icon;
@@ -236,7 +291,6 @@ router.put("/:id", auth, async (req, res) => {
     if (body.target !== undefined) tracker.target = body.target;
     if (body.unit !== undefined) tracker.unit = body.unit;
 
-    // Handle encrypted string payloads or traditional array updates safely
     if (body.entries !== undefined) {
       tracker.set("entries", body.entries);
     } else if (body.entry !== undefined) {
