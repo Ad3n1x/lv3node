@@ -6,18 +6,18 @@ const cors = require("cors");
 const cron = require("node-cron");
 const webpush = require("web-push");
 
-// 1. INITIALIZE EXPRESS APP FIRST
+// 1. INITIALIZE EXPRESS APP
 const app = express();
 
-// 2. CONFIGURE TRUST PROXY BEFORE ANY MIDDLEWARE OR ROUTES
+// 2. CONFIGURE TRUST PROXY
 app.set("trust proxy", 1);
 
 const User = require("./models/User");
-const authRoutes = require("./routes/auth.routes"); // Ensured route path matches auth.js
+const authRoutes = require("./routes/auth.routes");
 const trackerRoutes = require("./routes/trackerRoutes");
 const verifyToken = require("./middleware/auth");
 
-// Fix DNS resolution for MongoDB Atlas SRV connection strings in restricted node environments
+// Fix DNS resolution for MongoDB Atlas SRV connection strings
 if (
   process.env.MONGODB_URI &&
   process.env.MONGODB_URI.startsWith("mongodb+srv://")
@@ -29,15 +29,19 @@ if (
   }
 }
 
-// Global Middlewares & CORS Configuration
-app.use(
-  cors({
-    origin: true, // Dynamically allow frontend origins
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
+// Global CORS Configuration
+const corsOptions = {
+  origin: true, // Dynamically allow request origins
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  optionsSuccessStatus: 200,
+};
+
+app.use(cors(corsOptions));
+
+// Explicit preflight handling across all endpoints
+app.options("*", cors(corsOptions));
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -85,7 +89,13 @@ app.get("/health", (req, res) => res.status(200).send("OK"));
 // API ROUTES
 // ==========================================
 app.use("/api/v1/auth", authRoutes);
+app.use("/api/auth", authRoutes); // Fallback alias
+
+// Mount tracker routes on all paths queried by frontend
 app.use("/api/v1/trackers", trackerRoutes);
+app.use("/api/trackers", trackerRoutes);     // Legacy fallback alias
+app.use("/api/v1/tracker", trackerRoutes);    // Singular fallback alias
+app.use("/api/tracker", trackerRoutes);       // Singular fallback alias
 
 // Endpoint for Web Push Notification Subscriptions
 app.post("/api/v1/subscribe", verifyToken, async (req, res) => {
@@ -125,7 +135,6 @@ cron.schedule("0 20 * * *", async () => {
 
     for (const sub of subs) {
       await webpush.sendNotification(sub.subscription, payload).catch((err) => {
-        // Clear dead or expired subscriptions automatically
         if (err.statusCode === 404 || err.statusCode === 410) {
           PushSubscription.deleteOne({ _id: sub._id }).exec();
         } else {
