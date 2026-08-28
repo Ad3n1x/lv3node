@@ -3,7 +3,7 @@ const Tracker = require("../models/Tracker");
 // 1. THIS FIXES THE ENCRYPTED TEXT ON THE DETAIL PAGE
 const getTrackerEntries = async (req, res) => {
   try {
-    const { trackerId } = req.params;
+    const trackerId = req.params.id || req.params.trackerId;
     const userId = req.user?._id || req.user?.id || req.user?.userId || req.user;
 
     if (!userId) {
@@ -41,9 +41,12 @@ const getTrackerEntries = async (req, res) => {
 // 2. THIS FIXES THE "MARK DONE" BUTTON REVERTING (500 ERROR)
 const updateTracker = async (req, res) => {
   try {
-    // Depending on your route, this might be req.params.trackerId
     const trackerId = req.params.id || req.params.trackerId; 
     const userId = req.user?._id || req.user?.id || req.user?.userId || req.user;
+
+    if (!userId) {
+      return res.status(401).json({ message: "Authentication required." });
+    }
 
     const tracker = await Tracker.findOne({ _id: trackerId, userId });
 
@@ -82,5 +85,5 @@ const updateTracker = async (req, res) => {
 
 module.exports = { 
   getTrackerEntries, 
-  updateTracker // Ensure this matches what you import in your routes file!
+  updateTracker 
 };
