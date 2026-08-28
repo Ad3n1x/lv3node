@@ -35,6 +35,7 @@ router.get("/", auth, async (req, res) => {
 
 // Get all entries for a specific tracker (Positioned above /:id to prevent route interception)
 router.get("/:id/entries", auth, async (req, res) => {
+  console.log("➡️ [ROUTE HIT] GET /api/v1/trackers/:id/entries for ID:", req.params.id);
   try {
     const userId = getUserId(req);
     if (!userId) return res.status(401).json({ message: "Unauthorized: Invalid user session." });
@@ -49,6 +50,7 @@ router.get("/:id/entries", auth, async (req, res) => {
       return res.status(404).json({ message: "Tracker not found or unauthorized." });
     }
 
+    console.log("📦 [DB] Entries found for tracker:", tracker.entries);
     return res.status(200).json(tracker.entries || []);
   } catch (err) {
     console.error("Failed to retrieve entries:", err);
