@@ -33,6 +33,29 @@ router.get("/", auth, async (req, res) => {
   }
 });
 
+// Get all entries for a specific tracker (Positioned above /:id to prevent route interception)
+router.get("/:id/entries", auth, async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ message: "Unauthorized: Invalid user session." });
+
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid tracker ID format." });
+    }
+
+    const tracker = await Tracker.findOne({ _id: id, userId }).maxTimeMS(5000);
+    if (!tracker) {
+      return res.status(404).json({ message: "Tracker not found or unauthorized." });
+    }
+
+    return res.status(200).json(tracker.entries || []);
+  } catch (err) {
+    console.error("Failed to retrieve entries:", err);
+    return res.status(500).json({ message: "Failed to retrieve entries.", error: err.message });
+  }
+});
+
 // Get a single tracker by ID (with debugging and timeout protection)
 router.get("/:id", auth, async (req, res) => {
   console.log("➡️ [ROUTE HIT] GET /api/v1/trackers/", req.params.id);
@@ -61,29 +84,6 @@ router.get("/:id", auth, async (req, res) => {
   } catch (err) {
     console.error("❌ [ERROR] GET /:id failed:", err);
     return res.status(500).json({ message: "Server error", error: err.message });
-  }
-});
-
-// Get all entries for a specific tracker
-router.get("/:id/entries", auth, async (req, res) => {
-  try {
-    const userId = getUserId(req);
-    if (!userId) return res.status(401).json({ message: "Unauthorized: Invalid user session." });
-
-    const { id } = req.params;
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ message: "Invalid tracker ID format." });
-    }
-
-    const tracker = await Tracker.findOne({ _id: id, userId }).maxTimeMS(5000);
-    if (!tracker) {
-      return res.status(404).json({ message: "Tracker not found or unauthorized." });
-    }
-
-    return res.status(200).json(tracker.entries || []);
-  } catch (err) {
-    console.error("Failed to retrieve entries:", err);
-    return res.status(500).json({ message: "Failed to retrieve entries.", error: err.message });
   }
 });
 
