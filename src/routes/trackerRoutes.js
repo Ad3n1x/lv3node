@@ -66,6 +66,32 @@ router.get("/:id", auth, async (req, res) => {
   }
 });
 
+// 🛠️ FIX 1: GET /api/v1/trackers/:id/entries (Resolves UNMATCHED ROUTE HIT error)
+router.get("/:id/entries", auth, async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized: Invalid user session." });
+
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid tracker ID format." });
+    }
+
+    const tracker = await Tracker.findOne({ _id: id, userId });
+    if (!tracker) {
+      return res.status(404).json({ success: false, message: "Tracker not found or unauthorized." });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: tracker.entries || [],
+      entries: tracker.entries || [],
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: "Failed to retrieve entries.", error: err.message });
+  }
+});
+
 // Create tracker for logged-in user
 router.post("/", auth, async (req, res) => {
   try {
@@ -147,6 +173,40 @@ router.post("/:id/entries", auth, async (req, res) => {
   } catch (err) {
     console.error("Failed to add entry:", err);
     return res.status(400).json({ success: false, message: "Failed to add entry.", error: err.message });
+  }
+});
+
+// 🛠️ FIX 2: PUT /api/v1/trackers/:id/entries (Allows full entries array sync)
+router.put("/:id/entries", auth, async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized: Invalid user session." });
+
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid tracker ID format." });
+    }
+
+    const tracker = await Tracker.findOne({ _id: id, userId });
+    if (!tracker) {
+      return res.status(404).json({ success: false, message: "Tracker not found or unauthorized." });
+    }
+
+    const payload = req.body.entries !== undefined ? req.body.entries : req.body;
+    tracker.set("entries", payload);
+    tracker.markModified("entries");
+
+    const updatedTracker = await tracker.save();
+    const formatted = formatTracker(updatedTracker);
+
+    return res.status(200).json({
+      success: true,
+      data: formatted,
+      ...formatted,
+    });
+  } catch (err) {
+    console.error("Failed to update entries:", err);
+    return res.status(500).json({ success: false, message: "Failed to update entries.", error: err.message });
   }
 });
 
