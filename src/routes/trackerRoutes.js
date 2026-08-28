@@ -33,24 +33,33 @@ router.get("/", auth, async (req, res) => {
   }
 });
 
-// Get a single tracker by ID
+// Get a single tracker by ID (with debugging and timeout protection)
 router.get("/:id", auth, async (req, res) => {
+  console.log("➡️ [ROUTE HIT] GET /api/v1/trackers/", req.params.id);
   try {
     const userId = getUserId(req);
-    if (!userId) return res.status(401).json({ message: "Unauthorized: Invalid user session." });
+    console.log("👤 [AUTH] Extracted userId:", userId);
+
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized: Invalid user session." });
+    }
 
     const { id } = req.params;
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ message: "Invalid tracker ID format." });
     }
 
-    const tracker = await Tracker.findOne({ _id: id, userId });
+    console.log("🔍 [DB] Executing Tracker.findOne for ID:", id);
+    const tracker = await Tracker.findOne({ _id: id, userId }).maxTimeMS(5000);
+    console.log("📦 [DB] Query completed. Found:", !!tracker);
+
     if (!tracker) {
       return res.status(404).json({ message: "Tracker not found or unauthorized." });
     }
 
     return res.status(200).json(formatTracker(tracker));
   } catch (err) {
+    console.error("❌ [ERROR] GET /:id failed:", err);
     return res.status(500).json({ message: "Server error", error: err.message });
   }
 });
@@ -66,7 +75,7 @@ router.get("/:id/entries", auth, async (req, res) => {
       return res.status(400).json({ message: "Invalid tracker ID format." });
     }
 
-    const tracker = await Tracker.findOne({ _id: id, userId });
+    const tracker = await Tracker.findOne({ _id: id, userId }).maxTimeMS(5000);
     if (!tracker) {
       return res.status(404).json({ message: "Tracker not found or unauthorized." });
     }
@@ -125,7 +134,7 @@ router.post("/:id/entries", auth, async (req, res) => {
       return res.status(400).json({ message: "Invalid tracker ID format." });
     }
 
-    const tracker = await Tracker.findOne({ _id: id, userId });
+    const tracker = await Tracker.findOne({ _id: id, userId }).maxTimeMS(5000);
     if (!tracker) {
       return res.status(404).json({ message: "Tracker not found or unauthorized." });
     }
@@ -160,7 +169,7 @@ router.put("/:id", auth, async (req, res) => {
       return res.status(400).json({ message: "Invalid tracker ID format." });
     }
 
-    const tracker = await Tracker.findOne({ _id: id, userId });
+    const tracker = await Tracker.findOne({ _id: id, userId }).maxTimeMS(5000);
     if (!tracker) {
       return res.status(404).json({ message: "Tracker not found or unauthorized." });
     }

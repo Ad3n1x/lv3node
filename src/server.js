@@ -2,6 +2,10 @@ require("dotenv").config();
 const dns = require("dns");
 const express = require("express");
 const mongoose = require("mongoose");
+
+// Disable Mongoose command buffering globally to prevent hanging queries on DB connection issues
+mongoose.set("bufferCommands", false);
+
 const cors = require("cors");
 const cron = require("node-cron");
 const webpush = require("web-push");
