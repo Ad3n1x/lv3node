@@ -1,86 +1,101 @@
-const Tracker = require("../models/Tracker");
+const mongoose = require("mongoose");
+const CryptoJS = require("crypto-js");
 
-// 1. THIS FIXES THE ENCRYPTED TEXT ON THE DETAIL PAGE
-const getTrackerEntries = async (req, res) => {
+const CLIENT_SECRET = "your_client_side_encryption_secret";
+
+const TrackerSchema = new mongoose.Schema(
+  {
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      required: true,
+      ref: "User",
+    },
+
+    name: {
+      type: String,
+      required: true,
+    },
+
+    type: {
+      type: String,
+      required: true,
+    },
+
+    unit: {
+      type: String,
+      default: "",
+    },
+
+    target: {
+      type: String,
+      default: "",
+    },
+
+    // ⭐ THIS MUST BE AN ARRAY — NOT OBJECT, NOT MIXED
+    entries: {
+      type: String, // encrypted string stored here
+      default: CryptoJS.AES.encrypt(JSON.stringify([]), CLIENT_SECRET).toString(),
+    },
+
+    color: {
+      type: String,
+      default: "#3b82f6",
+    },
+
+    isSample: {
+      type: Boolean,
+      default: false,
+    },
+  },
+  { timestamps: true }
+);
+
+/* -------------------------------------------------------
+   🔐 Encrypt entries BEFORE saving
+------------------------------------------------------- */
+TrackerSchema.pre("save", function (next) {
   try {
-    const { trackerId } = req.params;
-    const userId = req.user?._id || req.user?.id || req.user?.userId || req.user;
-
-    if (!userId) {
-      return res.status(401).json({ message: "Authentication required." });
+    // If entries is already encrypted, skip
+    if (typeof this.entries === "string" && this.entries.startsWith("U2FsdGVkX1")) {
+      return next();
     }
 
-    const tracker = await Tracker.findOne({
-      _id: trackerId,
-      userId: userId,
-    });
-
-    if (!tracker) {
-      return res.status(404).json({ message: "Tracker not found." });
+    // If entries is an array, encrypt it
+    if (Array.isArray(this.entries)) {
+      this.entries = CryptoJS.AES.encrypt(
+        JSON.stringify(this.entries),
+        CLIENT_SECRET
+      ).toString();
     }
 
-    // .toJSON() safely runs the decryption we set up in the model
-    const trackerObj = tracker.toJSON();
-
-    return res.status(200).json({
-      status: "success",
-      data: {
-        ...trackerObj, 
-        trackerName: trackerObj.name,
-        unit: trackerObj.unit,
-        target: trackerObj.target,
-        entries: Array.isArray(trackerObj.entries) ? trackerObj.entries : [], 
-      },
-    });
-  } catch (error) {
-    console.error("Error in getTrackerEntries:", error);
-    return res.status(500).json({ message: "Server error", error: error.message });
+    next();
+  } catch (err) {
+    console.error("Error encrypting entries:", err);
+    next(err);
   }
-};
+});
 
-// 2. THIS FIXES THE "MARK DONE" BUTTON REVERTING (500 ERROR)
-const updateTracker = async (req, res) => {
+/* -------------------------------------------------------
+   🔓 Decrypt entries when converting to JSON
+------------------------------------------------------- */
+TrackerSchema.methods.toJSON = function () {
+  const obj = this.toObject();
+
   try {
-    // Depending on your route, this might be req.params.trackerId
-    const trackerId = req.params.id || req.params.trackerId; 
-    const userId = req.user?._id || req.user?.id || req.user?.userId || req.user;
+    if (typeof obj.entries === "string" && obj.entries.startsWith("U2FsdGVkX1")) {
+      const bytes = CryptoJS.AES.decrypt(obj.entries, CLIENT_SECRET);
+      const decrypted = bytes.toString(CryptoJS.enc.Utf8);
 
-    const tracker = await Tracker.findOne({ _id: trackerId, userId });
-
-    if (!tracker) {
-      return res.status(404).json({ message: "Tracker not found" });
-    }
-
-    // Get the properly decrypted array of current entries
-    let currentEntries = tracker.toJSON().entries || [];
-
-    // Push the new entry from the frontend
-    if (req.body.entry) {
-      currentEntries.push(req.body.entry);
-    } else if (req.body.entries) {
-      currentEntries = req.body.entries;
+      obj.entries = JSON.parse(decrypted);
     } else {
-      // Default fallback if body is empty for a habit
-      currentEntries.push({ date: new Date().toISOString(), status: "completed" });
+      obj.entries = [];
     }
-
-    // Reassign the array to the document
-    tracker.entries = currentEntries;
-
-    // Use .save() instead of findOneAndUpdate so encryption works perfectly
-    await tracker.save();
-
-    return res.status(200).json({
-      status: "success",
-      data: tracker.toJSON(),
-    });
-  } catch (error) {
-    console.error("Error updating tracker:", error);
-    return res.status(500).json({ message: "Server error", error: error.message });
+  } catch (err) {
+    console.error("Error decrypting entries:", err);
+    obj.entries = [];
   }
+
+  return obj;
 };
 
-module.exports = { 
-  getTrackerEntries, 
-  updateTracker // Ensure this matches what you import in your routes file!
-};
+module.exports = mongoose.model("Tracker", TrackerSchema);
