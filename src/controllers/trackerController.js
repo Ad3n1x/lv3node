@@ -3,7 +3,7 @@ const Tracker = require("../models/Tracker");
 // 1. THIS FIXES THE ENCRYPTED TEXT ON THE DETAIL PAGE
 const getTrackerEntries = async (req, res) => {
   try {
-    const trackerId = req.params.id || req.params.trackerId;
+    const { trackerId } = req.params;
     const userId = req.user?._id || req.user?.id || req.user?.userId || req.user;
 
     if (!userId) {
@@ -24,7 +24,6 @@ const getTrackerEntries = async (req, res) => {
 
     return res.status(200).json({
       status: "success",
-      success: true, // Compatibility fallback
       data: {
         ...trackerObj, 
         trackerName: trackerObj.name,
@@ -32,7 +31,6 @@ const getTrackerEntries = async (req, res) => {
         target: trackerObj.target,
         entries: Array.isArray(trackerObj.entries) ? trackerObj.entries : [], 
       },
-      entries: Array.isArray(trackerObj.entries) ? trackerObj.entries : [], // Compatibility fallback
     });
   } catch (error) {
     console.error("Error in getTrackerEntries:", error);
@@ -43,12 +41,9 @@ const getTrackerEntries = async (req, res) => {
 // 2. THIS FIXES THE "MARK DONE" BUTTON REVERTING (500 ERROR)
 const updateTracker = async (req, res) => {
   try {
+    // Depending on your route, this might be req.params.trackerId
     const trackerId = req.params.id || req.params.trackerId; 
     const userId = req.user?._id || req.user?.id || req.user?.userId || req.user;
-
-    if (!userId) {
-      return res.status(401).json({ message: "Authentication required." });
-    }
 
     const tracker = await Tracker.findOne({ _id: trackerId, userId });
 
@@ -64,8 +59,6 @@ const updateTracker = async (req, res) => {
       currentEntries.push(req.body.entry);
     } else if (req.body.entries) {
       currentEntries = req.body.entries;
-    } else if (Object.keys(req.body).length > 0 && (req.body.date !== undefined || req.body.value !== undefined)) {
-      currentEntries.push(req.body);
     } else {
       // Default fallback if body is empty for a habit
       currentEntries.push({ date: new Date().toISOString(), status: "completed" });
@@ -77,17 +70,9 @@ const updateTracker = async (req, res) => {
     // Use .save() instead of findOneAndUpdate so encryption works perfectly
     await tracker.save();
 
-    const trackerObj = tracker.toJSON();
-
     return res.status(200).json({
       status: "success",
-      success: true,
-      data: {
-        ...trackerObj,
-        trackerName: trackerObj.name,
-        entries: trackerObj.entries || [],
-      },
-      ...trackerObj,
+      data: tracker.toJSON(),
     });
   } catch (error) {
     console.error("Error updating tracker:", error);
@@ -97,5 +82,5 @@ const updateTracker = async (req, res) => {
 
 module.exports = { 
   getTrackerEntries, 
-  updateTracker 
+  updateTracker // Ensure this matches what you import in your routes file!
 };

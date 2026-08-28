@@ -1,52 +1,9 @@
 const express = require("express");
 const mongoose = require("mongoose");
-const CryptoJS = require("crypto-js");
 const Tracker = require("../models/Tracker");
 const auth = require("../middleware/auth");
 
 const router = express.Router();
-
-// 🔑 Encryption secret sync (maps to ENCRYPTION_KEY in your .env file)
-const ENCRYPTION_SECRET = 
-  process.env.ENCRYPTION_KEY || 
-  process.env.ENCRYPTION_SECRET || 
-  process.env.CLIENT_SECRET || 
-  "your_client_side_encryption_secret";
-
-// 🔓 Helper: Safely decrypts string or object ciphertext fields
-const decryptData = (field) => {
-  if (!field) return field;
-  try {
-    // Handle object-based ciphertext from database ({ ciphertext, iv, encryptedKey })
-    if (typeof field === "object" && field.ciphertext) {
-      const options = field.iv ? { iv: CryptoJS.enc.Utf8.parse(field.iv) } : {};
-      const bytes = CryptoJS.AES.decrypt(field.ciphertext, ENCRYPTION_SECRET, options);
-      const decryptedStr = bytes.toString(CryptoJS.enc.Utf8);
-      if (decryptedStr) {
-        try {
-          return JSON.parse(decryptedStr);
-        } catch {
-          return !isNaN(decryptedStr) && decryptedStr !== "" ? Number(decryptedStr) : decryptedStr;
-        }
-      }
-    }
-    // Handle standard CryptoJS string ciphertext ("U2FsdGVkX1...")
-    if (typeof field === "string" && field.startsWith("U2FsdGVkX1")) {
-      const bytes = CryptoJS.AES.decrypt(field, ENCRYPTION_SECRET);
-      const decryptedStr = bytes.toString(CryptoJS.enc.Utf8);
-      if (decryptedStr) {
-        try {
-          return JSON.parse(decryptedStr);
-        } catch {
-          return !isNaN(decryptedStr) && decryptedStr !== "" ? Number(decryptedStr) : decryptedStr;
-        }
-      }
-    }
-  } catch (err) {
-    console.error("Decryption error:", err.message);
-  }
-  return field;
-};
 
 // 🛡️ Helper: Safely extracts user ID from any JWT payload structure
 const getUserId = (req) => {
@@ -54,24 +11,12 @@ const getUserId = (req) => {
   return req.user.id || req.user._id || req.user.userId || (typeof req.user === "string" ? req.user : null);
 };
 
-// 🛡️ Helper: Guarantees consistent tracker payload structure & decrypts encrypted fields
+// 🛡️ Helper: Guarantees consistent tracker payload structure across all routes
 const formatTracker = (trackerDoc) => {
-  const trackerObj = trackerDoc.toJSON ? trackerDoc.toJSON() : trackerDoc;
-  
-  const decryptedName = decryptData(trackerObj.name);
-  const decryptedEntries = decryptData(trackerObj.entries);
-  const decryptedType = decryptData(trackerObj.type);
-  const decryptedUnit = decryptData(trackerObj.unit);
-  const decryptedTarget = decryptData(trackerObj.target);
-
+  const trackerObj = trackerDoc.toJSON();
   return {
     ...trackerObj,
-    name: decryptedName || "",
-    trackerName: decryptedName || trackerObj.trackerName || "",
-    type: decryptedType || trackerObj.type || "tracker",
-    unit: decryptedUnit !== undefined ? decryptedUnit : trackerObj.unit,
-    target: decryptedTarget !== undefined ? decryptedTarget : trackerObj.target,
-    entries: Array.isArray(decryptedEntries) ? decryptedEntries : (trackerObj.entries || []),
+    trackerName: trackerObj.name || "",
   };
 };
 
@@ -79,18 +24,12 @@ const formatTracker = (trackerDoc) => {
 router.get("/", auth, async (req, res) => {
   try {
     const userId = getUserId(req);
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized: Invalid user session." });
+    if (!userId) return res.status(401).json({ message: "Unauthorized: Invalid user session." });
 
     const trackers = await Tracker.find({ userId }).sort({ createdAt: -1 });
-    const formattedTrackers = trackers.map((t) => formatTracker(t));
-
-    return res.status(200).json({
-      success: true,
-      data: formattedTrackers,
-      trackers: formattedTrackers, // Compatibility fallback
-    });
+    return res.status(200).json(trackers.map((t) => formatTracker(t)));
   } catch (err) {
-    return res.status(500).json({ success: false, message: "Error retrieving trackers.", error: err.message });
+    return res.status(500).json({ message: "Error retrieving trackers.", error: err.message });
   }
 });
 
@@ -98,53 +37,21 @@ router.get("/", auth, async (req, res) => {
 router.get("/:id", auth, async (req, res) => {
   try {
     const userId = getUserId(req);
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized: Invalid user session." });
+    if (!userId) return res.status(401).json({ message: "Unauthorized: Invalid user session." });
 
     const { id } = req.params;
     if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid tracker ID format." });
+      return res.status(400).json({ message: "Invalid tracker ID format." });
     }
 
     const tracker = await Tracker.findOne({ _id: id, userId });
     if (!tracker) {
-      return res.status(404).json({ success: false, message: "Tracker not found or unauthorized." });
+      return res.status(404).json({ message: "Tracker not found or unauthorized." });
     }
 
-    const formatted = formatTracker(tracker);
-    return res.status(200).json({
-      success: true,
-      data: formatted,
-      ...formatted, // Unrolled properties fallback
-    });
+    return res.status(200).json(formatTracker(tracker));
   } catch (err) {
-    return res.status(500).json({ success: false, message: "Server error", error: err.message });
-  }
-});
-
-// GET /api/v1/trackers/:id/entries
-router.get("/:id/entries", auth, async (req, res) => {
-  try {
-    const userId = getUserId(req);
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized: Invalid user session." });
-
-    const { id } = req.params;
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid tracker ID format." });
-    }
-
-    const tracker = await Tracker.findOne({ _id: id, userId });
-    if (!tracker) {
-      return res.status(404).json({ success: false, message: "Tracker not found or unauthorized." });
-    }
-
-    const formatted = formatTracker(tracker);
-    return res.status(200).json({
-      success: true,
-      data: formatted.entries || [],
-      entries: formatted.entries || [],
-    });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: "Failed to retrieve entries.", error: err.message });
+    return res.status(500).json({ message: "Server error", error: err.message });
   }
 });
 
@@ -153,14 +60,13 @@ router.post("/", auth, async (req, res) => {
   try {
     const userId = getUserId(req);
     if (!userId) {
-      return res.status(401).json({ success: false, message: "Unauthorized: User ID missing from token." });
+      return res.status(401).json({ message: "Unauthorized: User ID could not be extracted from token." });
     }
 
     const { name, type, icon, color, target, unit, entries } = req.body || {};
 
     if (!name || !type) {
       return res.status(400).json({ 
-        success: false,
         message: "Validation Error: 'name' and 'type' are required fields.",
         receivedBody: req.body 
       });
@@ -168,7 +74,7 @@ router.post("/", auth, async (req, res) => {
 
     const tracker = new Tracker({
       userId,
-      name: typeof name === "string" ? name.trim() : name,
+      name: name.trim(),
       type,
       icon,
       color,
@@ -178,16 +84,10 @@ router.post("/", auth, async (req, res) => {
     });
 
     const savedTracker = await tracker.save();
-    const formatted = formatTracker(savedTracker);
-
-    return res.status(201).json({
-      success: true,
-      data: formatted,
-      ...formatted,
-    });
+    return res.status(201).json(formatTracker(savedTracker));
   } catch (err) {
     console.error("Tracker creation error:", err.message);
-    return res.status(400).json({ success: false, message: "Failed to create tracker.", error: err.message });
+    return res.status(400).json({ message: "Failed to create tracker.", error: err.message });
   }
 });
 
@@ -195,102 +95,64 @@ router.post("/", auth, async (req, res) => {
 router.post("/:id/entries", auth, async (req, res) => {
   try {
     const userId = getUserId(req);
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized: Invalid user session." });
+    if (!userId) return res.status(401).json({ message: "Unauthorized: Invalid user session." });
 
     const { id } = req.params;
     if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid tracker ID format." });
+      return res.status(400).json({ message: "Invalid tracker ID format." });
     }
 
     const tracker = await Tracker.findOne({ _id: id, userId });
     if (!tracker) {
-      return res.status(404).json({ success: false, message: "Tracker not found or unauthorized." });
+      return res.status(404).json({ message: "Tracker not found or unauthorized." });
     }
 
     if (!req.body || Object.keys(req.body).length === 0) {
-      return res.status(400).json({ success: false, message: "Entry data cannot be empty." });
+      return res.status(400).json({ message: "Entry data cannot be empty." });
     }
 
     if (Array.isArray(tracker.entries)) {
       tracker.entries.push(req.body);
     } else {
-      tracker.entries = [req.body];
+      tracker.entries = req.body;
     }
     tracker.markModified("entries");
 
     const updatedTracker = await tracker.save();
-    const formatted = formatTracker(updatedTracker);
-
-    return res.status(200).json({
-      success: true,
-      data: formatted,
-      ...formatted,
-    });
+    return res.status(200).json(formatTracker(updatedTracker));
   } catch (err) {
     console.error("Failed to add entry:", err);
-    return res.status(400).json({ success: false, message: "Failed to add entry.", error: err.message });
+    return res.status(400).json({ message: "Failed to add entry.", error: err.message });
   }
 });
 
-// PUT /api/v1/trackers/:id/entries
-router.put("/:id/entries", auth, async (req, res) => {
-  try {
-    const userId = getUserId(req);
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized: Invalid user session." });
-
-    const { id } = req.params;
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid tracker ID format." });
-    }
-
-    const tracker = await Tracker.findOne({ _id: id, userId });
-    if (!tracker) {
-      return res.status(404).json({ success: false, message: "Tracker not found or unauthorized." });
-    }
-
-    const payload = req.body.entries !== undefined ? req.body.entries : req.body;
-    tracker.set("entries", payload);
-    tracker.markModified("entries");
-
-    const updatedTracker = await tracker.save();
-    const formatted = formatTracker(updatedTracker);
-
-    return res.status(200).json({
-      success: true,
-      data: formatted,
-      ...formatted,
-    });
-  } catch (err) {
-    console.error("Failed to update entries:", err);
-    return res.status(500).json({ success: false, message: "Failed to update entries.", error: err.message });
-  }
-});
-
-// Update tracker details and entry list
+// Update tracker details
 router.put("/:id", auth, async (req, res) => {
   try {
     const userId = getUserId(req);
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized: Invalid user session." });
+    if (!userId) return res.status(401).json({ message: "Unauthorized: Invalid user session." });
 
     const { id } = req.params;
     if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid tracker ID format." });
+      return res.status(400).json({ message: "Invalid tracker ID format." });
     }
 
     const tracker = await Tracker.findOne({ _id: id, userId });
     if (!tracker) {
-      return res.status(404).json({ success: false, message: "Tracker not found or unauthorized." });
+      return res.status(404).json({ message: "Tracker not found or unauthorized." });
     }
 
     const body = req.body || {};
 
-    if (body.name !== undefined) tracker.name = typeof body.name === "string" ? body.name.trim() : body.name;
+    // Standard field updates
+    if (body.name !== undefined) tracker.name = body.name.trim();
     if (body.type !== undefined) tracker.type = body.type;
     if (body.icon !== undefined) tracker.icon = body.icon;
     if (body.color !== undefined) tracker.color = body.color;
     if (body.target !== undefined) tracker.target = body.target;
     if (body.unit !== undefined) tracker.unit = body.unit;
 
+    // Handle encrypted string payloads or traditional array updates safely
     if (body.entries !== undefined) {
       tracker.set("entries", body.entries);
     } else if (body.entry !== undefined) {
@@ -304,16 +166,10 @@ router.put("/:id", auth, async (req, res) => {
     tracker.markModified("entries");
 
     const updatedTracker = await tracker.save();
-    const formatted = formatTracker(updatedTracker);
-
-    return res.status(200).json({
-      success: true,
-      data: formatted,
-      ...formatted,
-    });
+    return res.status(200).json(formatTracker(updatedTracker));
   } catch (err) {
     console.error("Failed to update tracker:", err);
-    return res.status(500).json({ success: false, message: "Failed to update tracker.", error: err.message });
+    return res.status(500).json({ message: "Failed to update tracker.", error: err.message });
   }
 });
 
@@ -321,20 +177,20 @@ router.put("/:id", auth, async (req, res) => {
 router.delete("/:id", auth, async (req, res) => {
   try {
     const userId = getUserId(req);
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized: Invalid user session." });
+    if (!userId) return res.status(401).json({ message: "Unauthorized: Invalid user session." });
 
     const { id } = req.params;
     if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid tracker ID format." });
+      return res.status(400).json({ message: "Invalid tracker ID format." });
     }
 
     const tracker = await Tracker.findOneAndDelete({ _id: id, userId });
-    if (!tracker) return res.status(404).json({ success: false, message: "Tracker not found or unauthorized." });
+    if (!tracker) return res.status(404).json({ message: "Tracker not found or unauthorized." });
 
-    return res.status(200).json({ success: true, message: "Tracker deleted successfully.", id });
+    return res.status(200).json({ message: "Tracker deleted successfully.", id });
   } catch (err) {
     console.error("Failed to delete tracker:", err);
-    return res.status(500).json({ success: false, message: "Failed to delete tracker.", error: err.message });
+    return res.status(500).json({ message: "Failed to delete tracker.", error: err.message });
   }
 });
 
