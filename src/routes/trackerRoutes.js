@@ -1,10 +1,11 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const Tracker = require("../models/Tracker");
-const auth = require("../middleware/auth");
+const verifyToken = require("../middleware/auth");
 const requirePro = require("../middleware/requirePro");
 
 const router = express.Router();
+const auth = verifyToken; // Alias for compatibility across all routes
 
 // 🛡️ Helper: Safely extracts user ID from any JWT payload structure
 const getUserId = (req) => {
@@ -22,7 +23,7 @@ const formatTracker = (trackerDoc) => {
 };
 
 // Get all trackers for logged-in user
-router.get("/", auth, async (req, res) => {
+router.get("/", verifyToken, async (req, res) => {
   try {
     const userId = getUserId(req);
     if (!userId) return res.status(401).json({ message: "Unauthorized: Invalid user session." });
@@ -35,7 +36,7 @@ router.get("/", auth, async (req, res) => {
 });
 
 // Get a single tracker by ID
-router.get("/:id", auth, async (req, res) => {
+router.get("/:id", verifyToken, async (req, res) => {
   try {
     const userId = getUserId(req);
     if (!userId) return res.status(401).json({ message: "Unauthorized: Invalid user session." });
@@ -57,7 +58,7 @@ router.get("/:id", auth, async (req, res) => {
 });
 
 // Create tracker for logged-in user
-router.post("/", auth, async (req, res) => {
+router.post("/", verifyToken, async (req, res) => {
   try {
     const userId = getUserId(req);
     if (!userId) {
@@ -93,7 +94,7 @@ router.post("/", auth, async (req, res) => {
 });
 
 // Dedicated Endpoint to Add an Entry Permanently
-router.post("/:id/entries", auth, async (req, res) => {
+router.post("/:id/entries", verifyToken, async (req, res) => {
   try {
     const userId = getUserId(req);
     if (!userId) return res.status(401).json({ message: "Unauthorized: Invalid user session." });
@@ -128,7 +129,7 @@ router.post("/:id/entries", auth, async (req, res) => {
 });
 
 // Update tracker details
-router.put("/:id", auth, async (req, res) => {
+router.put("/:id", verifyToken, async (req, res) => {
   try {
     const userId = getUserId(req);
     if (!userId) return res.status(401).json({ message: "Unauthorized: Invalid user session." });
@@ -173,7 +174,7 @@ router.put("/:id", auth, async (req, res) => {
 });
 
 // Delete tracker
-router.delete("/:id", auth, async (req, res) => {
+router.delete("/:id", verifyToken, async (req, res) => {
   try {
     const userId = getUserId(req);
     if (!userId) return res.status(401).json({ message: "Unauthorized: Invalid user session." });
@@ -194,7 +195,7 @@ router.delete("/:id", auth, async (req, res) => {
 });
 
 // Protected Premium Backend Route
-router.post("/export-data", auth, requirePro, async (req, res) => {
+router.post("/export-data", verifyToken, requirePro, async (req, res) => {
   try {
     res.json({ message: "Data exported successfully" });
   } catch (err) {

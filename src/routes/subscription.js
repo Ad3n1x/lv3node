@@ -1,52 +1,89 @@
-// 3. Backend Checkout Session Route (routes/subscription.js)
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-const authMiddleware = require('../middleware/auth'); // Your existing JWT auth middleware
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+const verifyToken = require("../middleware/auth");
+const User = require("../models/User");
 
-router.post('/create-checkout-session', authMiddleware, async (req, res) => {
+// Create Stripe Checkout Session for Pro upgrade
+router.post("/create-checkout-session", verifyToken, async (req, res) => {
+  console.log("👉 [CHECKOUT] Route hit! Request user:", req.user);
+
   try {
+    const userId = req.user.id || req.user._id || req.user.userId;
+    if (!userId) {
+      console.log("❌ [CHECKOUT] User ID missing from token payload.");
+      return res.status(400).json({ error: "User ID missing from token payload." });
+    }
+
+    console.log("👉 [CHECKOUT] Finding user in database...");
+    // Add a 5-second timeout safeguard so Mongoose never hangs infinitely
+    const user = await User.findById(userId).maxTimeMS(5000);
+    
+    if (!user) {
+      console.log("❌ [CHECKOUT] User not found in database for ID:", userId);
+      return res.status(404).json({ error: "User not found" });
+    }
+    console.log("✅ [CHECKOUT] User found:", user.email);
+
+    let customerId = user.stripeCustomerId;
+    if (!customerId) {
+      console.log("👉 [CHECKOUT] Creating Stripe customer...");
+      const customer = await stripe.customers.create({
+        email: user.email,
+        metadata: { userId: user._id.toString() },
+      }, { timeout: 10000 }); // 10s timeout for Stripe
+
+      customerId = customer.id;
+      user.stripeCustomerId = customerId;
+      await user.save();
+      console.log("✅ [CHECKOUT] Stripe customer created:", customerId);
+    }
+
+    console.log("👉 [CHECKOUT] Creating Stripe checkout session...");
     const session = await stripe.checkout.sessions.create({
-      payment_method_types: ['card'],
-      mode: 'subscription',
-      customer_email: req.user.email,
+      customer: customerId,
+      payment_method_types: ["card"],
       line_items: [
         {
-          price: process.env.STRIPE_PRO_PRICE_ID, // Price ID from your Stripe dashboard
+          price: process.env.STRIPE_PRICE_ID,
           quantity: 1,
         },
       ],
-      success_url: `${process.env.CLIENT_URL}/dashboard?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${process.env.CLIENT_URL}/dashboard`,
-      metadata: {
-        userId: req.user._id.toString(),
-      },
-    });
+      mode: "subscription",
+      success_url: `${req.headers.origin || "http://localhost:5173"}/?upgrade=success`,
+      cancel_url: `${req.headers.origin || "http://localhost:5173"}/?upgrade=cancelled`,
+      metadata: { userId: user._id.toString() },
+    }, { timeout: 10000 }); // 10s timeout for Stripe
 
-    res.json({ url: session.url });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.log("✅ [CHECKOUT] Session created successfully:", session.url);
+    return res.json({ url: session.url });
+  } catch (err) {
+    console.error("❌ [CHECKOUT ERROR]:", err);
+    return res.status(500).json({ error: err.message || "Failed to create checkout session" });
   }
 });
-// 1. Add Stripe Customer Portal Route to backend (routes/subscription.js)
-// This allows users to manage or cancel their subscriptions securely via Stripe's hosted portal.
-const requireAuth = require("../middleware/auth"); // your existing auth middleware
 
-router.post("/create-portal-session", requireAuth, async (req, res) => {
+// Create Stripe Billing Portal Session
+router.post("/create-portal-session", verifyToken, async (req, res) => {
+  console.log("👉 [PORTAL] Route hit!");
   try {
-    const user = await User.findById(req.user.id);
+    const userId = req.user.id || req.user._id || req.user.userId;
+    const user = await User.findById(userId).maxTimeMS(5000);
+    
     if (!user || !user.stripeCustomerId) {
       return res.status(400).json({ error: "No active billing profile found." });
     }
 
     const portalSession = await stripe.billingPortal.sessions.create({
       customer: user.stripeCustomerId,
-      return_url: `${process.env.CLIENT_URL}/homepage`,
-    });
+      return_url: `${req.headers.origin || "http://localhost:5173"}/`,
+    }, { timeout: 10000 });
 
-    res.json({ url: portalSession.url });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+    return res.json({ url: portalSession.url });
+  } catch (err) {
+    console.error("❌ [PORTAL ERROR]:", err);
+    return res.status(500).json({ error: err.message || "Failed to create billing portal session" });
   }
 });
+
 module.exports = router;
