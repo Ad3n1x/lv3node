@@ -2,7 +2,6 @@ require("dotenv").config();
 const dns = require("dns");
 const express = require("express");
 const mongoose = require("mongoose");
-const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
 // Disable Mongoose command buffering globally to prevent hanging queries on DB connection issues
 mongoose.set("bufferCommands", false);
@@ -34,39 +33,6 @@ if (
     console.warn("Could not set custom DNS servers:", e.message);
   }
 }
-
-// Stripe Webhook Endpoint (Must be defined BEFORE express.json() middleware to preserve raw body buffer)
-app.post("/webhook", express.raw({ type: "application/json" }), async (req, res) => {
-  const sig = req.headers["stripe-signature"];
-  let event;
-
-  try {
-    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
-  } catch (err) {
-    console.error(`Webhook Signature Error: ${err.message}`);
-    return res.status(400).send(`Webhook Error: ${err.message}`);
-  }
-
-  if (event.type === "checkout.session.completed") {
-    const session = event.data.object;
-    const userId = session.metadata?.userId;
-
-    if (userId) {
-      try {
-        await User.findByIdAndUpdate(userId, {
-          isPro: true,
-          subscriptionId: session.subscription,
-          stripeCustomerId: session.customer,
-        });
-        console.log(`✅ User ${userId} upgraded to Pro successfully.`);
-      } catch (err) {
-        console.error("Error updating user subscription status in DB:", err);
-      }
-    }
-  }
-
-  res.json({ received: true });
-});
 
 // Global Middlewares & CORS Configuration
 app.use(
@@ -147,14 +113,11 @@ app.post("/api/v1/subscribe", verifyToken, async (req, res) => {
   }
 });
 
-// Catch-all Unmatched Route Logger (404 Handler)
-app.use((req, res) => {
-  console.log(`⚠️ UNMATCHED ROUTE HIT: ${req.method} ${req.originalUrl}`);
-  res.status(404).json({ message: `Route ${req.originalUrl} not found on this server.` });
-});
+// ==========================================
+// PUSH NOTIFICATION LOGIC
+// ==========================================
 
-// Cron Job: Daily Push Notification Alert at 8:00 PM
-cron.schedule("0 20 * * *", async () => {
+const sendDailyNotifications = async () => {
   try {
     const subs = await PushSubscription.find().populate("userId");
 
@@ -173,9 +136,34 @@ cron.schedule("0 20 * * *", async () => {
         }
       });
     }
+    console.log(`✅ Push notifications sent to ${subs.length} subscribers.`);
   } catch (error) {
     console.error("Cron job execution error:", error);
   }
+};
+
+// Cron Job: Daily Push Notification Alert at 8:00 PM (WAT)
+cron.schedule("0 20 * * *", sendDailyNotifications, {
+  scheduled: true,
+  timezone: "Africa/Lagos", 
+});
+
+// Manual Webhook Endpoint (CRUCIAL FOR RENDER FREE TIER)
+// Hook this up to a free service like cron-job.org to ping at 8:00 PM WAT
+app.post("/api/v1/trigger-daily-push", async (req, res) => {
+  const secret = req.headers['x-cron-secret'];
+  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  await sendDailyNotifications();
+  res.status(200).json({ message: "Daily push notifications triggered manually." });
+});
+
+// Catch-all Unmatched Route Logger (404 Handler)
+app.use((req, res) => {
+  console.log(`⚠️ UNMATCHED ROUTE HIT: ${req.method} ${req.originalUrl}`);
+  res.status(404).json({ message: `Route ${req.originalUrl} not found on this server.` });
 });
 
 // Database Connection & Server Startup
