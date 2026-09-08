@@ -4,7 +4,10 @@ const jwt = require("jsonwebtoken");
 const rateLimit = require("express-rate-limit");
 const { BrevoClient } = require("@getbrevo/brevo");
 const User = require("../models/User");
-const verifyToken = require("../middleware/auth");
+
+// FIXED: Destructured verifyToken to ensure it resolves to a function, not an object
+const middleware = require("../middleware/auth");
+const verifyToken = typeof middleware === "function" ? middleware : middleware.verifyToken;
 
 const router = express.Router();
 
@@ -383,9 +386,9 @@ router.post("/reset-password", authLimiter, async (req, res) => {
   }
 });
 
-// 3. Add a Backend Route to Fetch Current User Profile & Pro Status (routes/auth.routes.js or user.routes.js)
-// Ensures your React frontend can check `isPro` status instantly on load.
-
+// ==========================================
+// 7. GET /api/v1/auth/me
+// ==========================================
 router.get("/me", verifyToken, async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select("-password");
