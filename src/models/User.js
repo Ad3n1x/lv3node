@@ -49,13 +49,41 @@ const userSchema = new mongoose.Schema(
     otpExpires: { type: Date },
     publicKey: { type: String },
     
-    // Single Subscription Field
-    isPremium: { type: Boolean, default: false },
+    // Subscription & Expiration Tracking
+    isPremiumRaw: { type: Boolean, default: false, alias: "isPremiumStored" },
+    subscriptionStatus: { 
+      type: String, 
+      enum: ["active", "expired", "cancelled", "none"], 
+      default: "none" 
+    },
+    subscriptionExpiresAt: { type: Date, default: null },
     subscriptionId: { type: String, default: null },
     stripeCustomerId: { type: String, default: null },
   },
-  { timestamps: true }
+  { 
+    timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true }
+  }
 );
+
+
+// ==========================================
+// DYNAMIC EXPIRATION CHECK (VIRTUAL)
+// ==========================================
+
+// Dynamically calculates 'isPremium' based on the current date vs subscriptionExpiresAt
+userSchema.virtual("isPremium").get(function () {
+  if (!this.isPremiumRaw) return false;
+  if (!this.subscriptionExpiresAt) return true; // Lifetime/Manual override if no date set
+  
+  // Return true ONLY if current time is before expiration date
+  return new Date() < new Date(this.subscriptionExpiresAt);
+});
+
+userSchema.virtual("isPremium").set(function (val) {
+  this.isPremiumRaw = val;
+});
 
 
 // ==========================================
