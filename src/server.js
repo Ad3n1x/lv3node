@@ -20,7 +20,23 @@ app.set("trust proxy", 1);
 const User = require("./models/User");
 const authRoutes = require("./routes/auth.routes");
 const trackerRoutes = require("./routes/trackerRoutes");
+
+// Auth and Premium Middlewares
 const verifyToken = require("./middleware/auth");
+
+// Internal Premium Gate Middleware
+const requirePremium = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({ error: "Unauthorized: Please log in." });
+  }
+  if (!req.user.isPremium && !req.user.isSubscribed) {
+    return res.status(403).json({
+      error: "Forbidden: Premium subscription required.",
+      code: "PREMIUM_REQUIRED",
+    });
+  }
+  next();
+};
 
 // Fix DNS resolution for MongoDB Atlas SRV connection strings in restricted environments
 if (
@@ -38,7 +54,6 @@ if (
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (like mobile apps, curl, or Postman)
       if (!origin) return callback(null, true);
       return callback(null, true);
     },
@@ -95,6 +110,14 @@ app.get("/health", (req, res) => res.status(200).send("OK"));
 // ==========================================
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/trackers", trackerRoutes);
+
+// Premium Feature Route Example
+app.get("/api/v1/premium-analytics", verifyToken, requirePremium, async (req, res) => {
+  return res.status(200).json({
+    success: true,
+    data: "This analytics data is restricted to premium subscribers only.",
+  });
+});
 
 // User Status Endpoint
 app.get(["/api/v1/user/status", "/api/user/status"], verifyToken, async (req, res) => {
@@ -172,7 +195,7 @@ app.post("/api/v1/payments/verify", verifyToken, async (req, res) => {
   }
 });
 
-// 1. Initialize ALATPay Transaction
+// 1. Initialize ALATPay Transaction (Accessible by regular users to buy subscription)
 app.post("/api/v1/alatpay/initialize", verifyToken, async (req, res) => {
   try {
     const { amount, reference } = req.body;
@@ -229,7 +252,6 @@ app.get("/api/v1/alatpay/verify/:reference", verifyToken, async (req, res) => {
       }
     } catch (apiErr) {
       console.warn("External ALATPay verification API failed, trusting frontend reference fallback:", apiErr.message);
-      // Fallback: If client passes reference after valid popup completion
       transactionSuccess = true;
     }
 
