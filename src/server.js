@@ -18,11 +18,19 @@ const app = express();
 app.set("trust proxy", 1);
 
 const User = require("./models/User");
-const authRoutes = require("./routes/auth.routes");
-const trackerRoutes = require("./routes/trackerRoutes");
 
-// Auth and Premium Middlewares
-const verifyToken = require("./middleware/auth");
+// Safely resolve router imports (handles module.exports = router AND module.exports = { router })
+const rawAuthRoutes = require("./routes/auth.routes");
+const authRoutes = rawAuthRoutes.router || rawAuthRoutes.default || rawAuthRoutes;
+
+const rawTrackerRoutes = require("./routes/trackerRoutes");
+const trackerRoutes = rawTrackerRoutes.router || rawTrackerRoutes.default || rawTrackerRoutes;
+
+// Safely resolve auth middleware (handles module.exports = verifyToken AND module.exports = { verifyToken })
+const rawVerifyToken = require("./middleware/auth");
+const verifyToken = typeof rawVerifyToken === "function"
+  ? rawVerifyToken
+  : (rawVerifyToken.verifyToken || rawVerifyToken.default || rawVerifyToken);
 
 // Internal Premium Gate Middleware
 const requirePremium = (req, res, next) => {
@@ -195,7 +203,7 @@ app.post("/api/v1/payments/verify", verifyToken, async (req, res) => {
   }
 });
 
-// 1. Initialize ALATPay Transaction (Accessible by regular users to buy subscription)
+// 1. Initialize ALATPay Transaction
 app.post("/api/v1/alatpay/initialize", verifyToken, async (req, res) => {
   try {
     const { amount, reference } = req.body;
