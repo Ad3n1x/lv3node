@@ -1,8 +1,17 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const Tracker = require("../models/Tracker");
-const verifyToken = require("../middleware/auth");
-const requirePro = require("../middleware/requirePro");
+
+// SAFELY RESOLVE MIDDLEWARE IMPORTS (Handles both module.exports = fn and module.exports = { fn })
+const rawVerifyToken = require("../middleware/auth");
+const verifyToken = typeof rawVerifyToken === "function" 
+  ? rawVerifyToken 
+  : (rawVerifyToken.verifyToken || rawVerifyToken.default);
+
+const rawRequirePro = require("../middleware/requirePro");
+const requirePro = typeof rawRequirePro === "function" 
+  ? rawRequirePro 
+  : (rawRequirePro.requirePro || rawRequirePro.default);
 
 const router = express.Router();
 const auth = verifyToken; // Alias for compatibility across all routes
