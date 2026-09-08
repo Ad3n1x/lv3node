@@ -1,10 +1,13 @@
 const mongoose = require("mongoose");
 const CryptoJS = require("crypto-js");
 
-// Use a secret key from your environment variables
+// Environment Secret Key for AES Encryption
 const SECRET_KEY = process.env.ENCRYPTION_KEY || "your_fallback_super_secret_key_32_bytes";
 
-// Helper encryption functions
+// ==========================================
+// HELPER ENCRYPTION & DECRYPTION FUNCTIONS
+// ==========================================
+
 const encryptData = (text) => {
   if (text === null || text === undefined) return text;
   const stringValue = typeof text === "object" ? JSON.stringify(text) : String(text);
@@ -30,42 +33,73 @@ const decryptData = (ciphertext) => {
   }
 };
 
+
+// ==========================================
+// MONGOOSE USER SCHEMA
+// ==========================================
+
 const userSchema = new mongoose.Schema(
   {
     firstName: { type: String, required: true }, // Encrypted at rest
     lastName: { type: String, required: true },  // Encrypted at rest
     email: { type: String, required: true, unique: true, lowercase: true, trim: true }, // Clear for querying/login
-    password: { type: String, required: true }, // Hashed via bcrypt (do not double encrypt)
+    password: { type: String, required: true },  // Hashed via bcrypt
     isVerified: { type: Boolean, default: false },
     otp: { type: String },
     otpExpires: { type: Date },
     publicKey: { type: String },
-    // Subscription / Monetization fields
+    
+    // Subscription & Monetization fields
     isPro: { type: Boolean, default: false },
+    isPremium: { type: Boolean, default: false }, // Direct alias for compatibility
     subscriptionId: { type: String, default: null },
     stripeCustomerId: { type: String, default: null },
   },
-  { timestamps: true }
+  { 
+    timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true }
+  }
 );
 
-// --- 1. ENCRYPT BEFORE SAVING ---
+
+// ==========================================
+// VIRTUAL ALIASES & DUAL-SYNC LOGIC
+// ==========================================
+
+// Keep 'isPro' and 'isPremium' synchronized before saving or updating
 userSchema.pre("save", function (next) {
+  // Sync flags: if either is set to true, set both to true
+  if (this.isPro || this.isPremium) {
+    this.isPro = true;
+    this.isPremium = true;
+  }
+
+  // Encrypt sensitive fields
   if (this.isModified("firstName") && !this.firstName.startsWith("U2FsdGVkX1")) {
     this.firstName = encryptData(this.firstName);
   }
   if (this.isModified("lastName") && !this.lastName.startsWith("U2FsdGVkX1")) {
     this.lastName = encryptData(this.lastName);
   }
+  
   next();
 });
 
-// --- 2. ENCRYPT BEFORE FIND ONE AND UPDATE ---
 userSchema.pre("findOneAndUpdate", function (next) {
   const update = this.getUpdate();
   if (!update) return next();
 
   const targetObj = update.$set || update;
 
+  // If updating isPro or isPremium, sync both fields
+  if (targetObj.isPro !== undefined || targetObj.isPremium !== undefined) {
+    const activeStatus = Boolean(targetObj.isPro || targetObj.isPremium);
+    targetObj.isPro = activeStatus;
+    targetObj.isPremium = activeStatus;
+  }
+
+  // Encrypt sensitive fields on update
   if (targetObj.firstName && !String(targetObj.firstName).startsWith("U2FsdGVkX1")) {
     targetObj.firstName = encryptData(targetObj.firstName);
   }
@@ -76,7 +110,7 @@ userSchema.pre("findOneAndUpdate", function (next) {
   next();
 });
 
-// --- 3. DECRYPT WHEN FETCHING DOCUMENTS ---
+// Decrypt fields when fetching documents
 userSchema.post(/^find|save|findOneAndUpdate/, function (docs) {
   if (!docs) return;
 
