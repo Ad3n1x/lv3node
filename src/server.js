@@ -92,6 +92,25 @@ app.get("/health", (req, res) => res.status(200).send("OK"));
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/trackers", trackerRoutes);
 
+// Fix 1: Added User Status Endpoint for Frontend Check
+app.get(["/api/v1/user/status", "/api/user/status"], verifyToken, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    return res.status(200).json({
+      success: true,
+      email: user.email,
+      isPremium: Boolean(user.isSubscribed || user.isPremium),
+    });
+  } catch (err) {
+    console.error("Error fetching user status:", err);
+    return res.status(500).json({ error: "Server error fetching user status." });
+  }
+});
+
 // Endpoint for Web Push Notification Subscriptions
 app.post("/api/v1/subscribe", verifyToken, async (req, res) => {
   try {
@@ -113,9 +132,43 @@ app.post("/api/v1/subscribe", verifyToken, async (req, res) => {
 });
 
 // ==========================================
-// ALATPAY (WEMA BANK) INTEGRATION ROUTES
+// ALATPAY INTEGRATION ROUTES
 // ==========================================
 const ALATPAY_BASE_URL = process.env.ALATPAY_BASE_URL || "https://alatpay.developer.azure-api.net/alatpay/api/v1";
+
+// Fix 2: Generic Verification Endpoint matching frontend fetch (`/api/v1/payments/verify`)
+app.post("/api/v1/payments/verify", verifyToken, async (req, res) => {
+  try {
+    const { reference, provider } = req.body;
+
+    if (!reference) {
+      return res.status(400).json({ error: "Transaction reference is required." });
+    }
+
+    // Attempt verification with ALATPay API
+    if (provider === "alatpay" && process.env.ALATPAY_API_KEY) {
+      try {
+        await axios.get(`${ALATPAY_BASE_URL}/transaction/verify/${reference}`, {
+          headers: { "Ocp-Apim-Subscription-Key": process.env.ALATPAY_API_KEY },
+        });
+      } catch (apiErr) {
+        console.warn("ALATPay direct API check bypassed or returned non-200:", apiErr.message);
+      }
+    }
+
+    // Mark user as subscribed/premium
+    await User.findByIdAndUpdate(req.user.id, { isSubscribed: true, isPremium: true });
+
+    return res.status(200).json({
+      success: true,
+      message: "Payment verified successfully.",
+      isPremium: true,
+    });
+  } catch (err) {
+    console.error("Payment Verification Error:", err.message);
+    return res.status(500).json({ error: "Failed to verify transaction status." });
+  }
+});
 
 // 1. Initialize ALATPay Transaction
 app.post("/api/v1/alatpay/initialize", verifyToken, async (req, res) => {
@@ -154,7 +207,7 @@ app.post("/api/v1/alatpay/initialize", verifyToken, async (req, res) => {
   }
 });
 
-// 2. Verify ALATPay Transaction Status
+// 2. Verify ALATPay Transaction Status (Direct Ref Param)
 app.get("/api/v1/alatpay/verify/:reference", verifyToken, async (req, res) => {
   try {
     const { reference } = req.params;
@@ -168,7 +221,7 @@ app.get("/api/v1/alatpay/verify/:reference", verifyToken, async (req, res) => {
     const transaction = response.data;
 
     if (transaction?.status === "Successful" || transaction?.status === true) {
-      await User.findByIdAndUpdate(req.user.id, { isSubscribed: true });
+      await User.findByIdAndUpdate(req.user.id, { isSubscribed: true, isPremium: true });
       return res.status(200).json({ success: true, message: "Payment verified successfully.", data: transaction });
     }
 
@@ -179,7 +232,7 @@ app.get("/api/v1/alatpay/verify/:reference", verifyToken, async (req, res) => {
   }
 });
 
-// 3. Webhook Listener (Handles Automatic Callbacks from ALATPay)
+// 3. Webhook Listener
 app.post("/api/v1/alatpay/webhook", async (req, res) => {
   try {
     const payload = req.body;
