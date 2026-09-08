@@ -2,6 +2,7 @@ require("dotenv").config();
 const dns = require("dns");
 const express = require("express");
 const mongoose = require("mongoose");
+const axios = require("axios");
 
 // Disable Mongoose command buffering globally to prevent hanging queries on DB connection issues
 mongoose.set("bufferCommands", false);
@@ -19,7 +20,6 @@ app.set("trust proxy", 1);
 const User = require("./models/User");
 const authRoutes = require("./routes/auth.routes");
 const trackerRoutes = require("./routes/trackerRoutes");
-const subscriptionRoutes = require("./routes/subscription");
 const verifyToken = require("./middleware/auth");
 
 // Fix DNS resolution for MongoDB Atlas SRV connection strings in restricted node environments
@@ -91,7 +91,6 @@ app.get("/health", (req, res) => res.status(200).send("OK"));
 // ==========================================
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/trackers", trackerRoutes);
-app.use("/api/v1/subscription", subscriptionRoutes);
 
 // Endpoint for Web Push Notification Subscriptions
 app.post("/api/v1/subscribe", verifyToken, async (req, res) => {
@@ -114,6 +113,97 @@ app.post("/api/v1/subscribe", verifyToken, async (req, res) => {
 });
 
 // ==========================================
+// ALATPAY (WEMA BANK) INTEGRATION ROUTES
+// ==========================================
+const ALATPAY_BASE_URL = process.env.ALATPAY_BASE_URL || "https://alatpay.developer.azure-api.net/alatpay/api/v1";
+
+// 1. Initialize ALATPay Transaction
+app.post("/api/v1/alatpay/initialize", verifyToken, async (req, res) => {
+  try {
+    const { amount, reference } = req.body;
+    const user = await User.findById(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    const payload = {
+      businessId: process.env.ALATPAY_BUSINESS_ID,
+      amount: amount,
+      currency: "NGN",
+      email: user.email,
+      customerName: user.name || "UniTrack Customer",
+      reference: reference || `UT_${Date.now()}_${req.user.id.slice(-4)}`,
+      callbackUrl: `${process.env.FRONTEND_URL || "http://localhost:3000"}/payment/callback`,
+    };
+
+    const response = await axios.post(`${ALATPAY_BASE_URL}/transaction/initialize`, payload, {
+      headers: {
+        "Ocp-Apim-Subscription-Key": process.env.ALATPAY_API_KEY,
+        "Content-Type": "application/json",
+      },
+    });
+
+    return res.status(200).json({ success: true, data: response.data });
+  } catch (err) {
+    console.error("ALATPay Initialization Error:", err.response?.data || err.message);
+    return res.status(500).json({
+      error: "Failed to initialize payment with ALATPay.",
+      details: err.response?.data || err.message,
+    });
+  }
+});
+
+// 2. Verify ALATPay Transaction Status
+app.get("/api/v1/alatpay/verify/:reference", verifyToken, async (req, res) => {
+  try {
+    const { reference } = req.params;
+
+    const response = await axios.get(`${ALATPAY_BASE_URL}/transaction/verify/${reference}`, {
+      headers: {
+        "Ocp-Apim-Subscription-Key": process.env.ALATPAY_API_KEY,
+      },
+    });
+
+    const transaction = response.data;
+
+    if (transaction?.status === "Successful" || transaction?.status === true) {
+      await User.findByIdAndUpdate(req.user.id, { isSubscribed: true });
+      return res.status(200).json({ success: true, message: "Payment verified successfully.", data: transaction });
+    }
+
+    return res.status(400).json({ success: false, message: "Payment verification failed or pending." });
+  } catch (err) {
+    console.error("ALATPay Verification Error:", err.response?.data || err.message);
+    return res.status(500).json({ error: "Failed to verify transaction status." });
+  }
+});
+
+// 3. Webhook Listener (Handles Automatic Callbacks from ALATPay)
+app.post("/api/v1/alatpay/webhook", async (req, res) => {
+  try {
+    const payload = req.body;
+    console.log("🔔 ALATPay Webhook Received:", JSON.stringify(payload, null, 2));
+
+    const incomingSignature = req.headers["x-alatpay-signature"];
+    if (process.env.ALATPAY_WEBHOOK_SECRET && incomingSignature !== process.env.ALATPAY_WEBHOOK_SECRET) {
+      console.warn("⚠️ Unauthorized ALATPay Webhook signature.");
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    if (payload?.status === "Successful" || payload?.status === true) {
+      const transactionRef = payload.reference || payload.orderId;
+      console.log(`✅ Payment confirmed via Webhook for Reference: ${transactionRef}`);
+    }
+
+    return res.status(200).json({ status: "ACK" });
+  } catch (err) {
+    console.error("Webhook Processing Error:", err.message);
+    return res.status(500).json({ error: "Webhook processing error." });
+  }
+});
+
+// ==========================================
 // PUSH NOTIFICATION LOGIC
 // ==========================================
 
@@ -128,7 +218,6 @@ const sendDailyNotifications = async () => {
 
     for (const sub of subs) {
       await webpush.sendNotification(sub.subscription, payload).catch((err) => {
-        // Clear dead or expired subscriptions automatically
         if (err.statusCode === 404 || err.statusCode === 410) {
           PushSubscription.deleteOne({ _id: sub._id }).exec();
         } else {
@@ -149,13 +238,12 @@ cron.schedule("0 20 * * *", sendDailyNotifications, {
 });
 
 // Manual Webhook Endpoint (CRUCIAL FOR RENDER FREE TIER)
-// Hook this up to a free service like cron-job.org to ping at 8:00 PM WAT
 app.post("/api/v1/trigger-daily-push", async (req, res) => {
   const secret = req.headers['x-cron-secret'];
   if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
     return res.status(401).json({ error: "Unauthorized" });
   }
-
+  
   await sendDailyNotifications();
   res.status(200).json({ message: "Daily push notifications triggered manually." });
 });
