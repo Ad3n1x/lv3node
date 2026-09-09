@@ -11,6 +11,8 @@ const cors = require("cors");
 const cron = require("node-cron");
 const webpush = require("web-push");
 
+const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+
 // 1. INITIALIZE EXPRESS APP
 const app = express();
 
@@ -26,24 +28,46 @@ const authRoutes = rawAuthRoutes.router || rawAuthRoutes.default || rawAuthRoute
 const rawTrackerRoutes = require("./routes/trackerRoutes");
 const trackerRoutes = rawTrackerRoutes.router || rawTrackerRoutes.default || rawTrackerRoutes;
 
-// Safely resolve auth middleware (handles module.exports = verifyToken AND module.exports = { verifyToken })
+// Safely resolve auth middleware
 const rawVerifyToken = require("./middleware/auth");
 const verifyToken = typeof rawVerifyToken === "function"
   ? rawVerifyToken
   : (rawVerifyToken.verifyToken || rawVerifyToken.default || rawVerifyToken);
 
-// Internal Premium Gate Middleware
-const requirePremium = (req, res, next) => {
+// Internal Premium Gate Middleware with 30-Day Expiration Check
+const requirePremium = async (req, res, next) => {
   if (!req.user) {
     return res.status(401).json({ error: "Unauthorized: Please log in." });
   }
-  if (!req.user.isPremium && !req.user.isSubscribed) {
-    return res.status(403).json({
-      error: "Forbidden: Premium subscription required.",
-      code: "PREMIUM_REQUIRED",
-    });
+
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    const now = new Date();
+    const isExpired = user.subscriptionExpiresAt && new Date(user.subscriptionExpiresAt) <= now;
+
+    if (isExpired && (user.isPremium || user.isSubscribed)) {
+      user.isPremium = false;
+      user.isSubscribed = false;
+      await user.save();
+    }
+
+    if (!user.isPremium && !user.isSubscribed) {
+      return res.status(403).json({
+        error: "Forbidden: Active 30-day premium subscription required.",
+        code: "PREMIUM_REQUIRED",
+      });
+    }
+
+    req.userObj = user;
+    next();
+  } catch (err) {
+    console.error("Error checking premium status in middleware:", err);
+    return res.status(500).json({ error: "Server error verifying subscription access." });
   }
-  next();
 };
 
 // Fix DNS resolution for MongoDB Atlas SRV connection strings in restricted environments
@@ -127,7 +151,7 @@ app.get("/api/v1/premium-analytics", verifyToken, requirePremium, async (req, re
   });
 });
 
-// User Status Endpoint
+// User Status Endpoint with Automatic 30-Day Expiration Handling
 app.get(["/api/v1/user/status", "/api/user/status"], verifyToken, async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
@@ -135,10 +159,26 @@ app.get(["/api/v1/user/status", "/api/user/status"], verifyToken, async (req, re
       return res.status(404).json({ error: "User not found." });
     }
 
+    const now = new Date();
+    let isPremium = Boolean(user.isSubscribed || user.isPremium);
+
+    // Enforce server-side 30-day expiration status check
+    if (user.subscriptionExpiresAt && new Date(user.subscriptionExpiresAt) <= now) {
+      if (isPremium) {
+        user.isSubscribed = false;
+        user.isPremium = false;
+        await user.save();
+        isPremium = false;
+      }
+    }
+
     return res.status(200).json({
       success: true,
       email: user.email,
-      isPremium: Boolean(user.isSubscribed || user.isPremium),
+      isPremium,
+      subscribedAt: user.subscribedAt || null,
+      expiresAt: user.subscriptionExpiresAt || null,
+      subscriptionExpiresAt: user.subscriptionExpiresAt || null,
     });
   } catch (err) {
     console.error("Error fetching user status:", err);
@@ -190,12 +230,22 @@ app.post("/api/v1/payments/verify", verifyToken, async (req, res) => {
       }
     }
 
-    await User.findByIdAndUpdate(req.user.id, { isSubscribed: true, isPremium: true });
+    const subscribedAt = new Date();
+    const subscriptionExpiresAt = new Date(subscribedAt.getTime() + THIRTY_DAYS_MS);
+
+    await User.findByIdAndUpdate(req.user.id, {
+      isSubscribed: true,
+      isPremium: true,
+      subscribedAt,
+      subscriptionExpiresAt,
+    });
 
     return res.status(200).json({
       success: true,
       message: "Payment verified successfully.",
       isPremium: true,
+      expiresAt: subscriptionExpiresAt,
+      subscriptionExpiresAt,
     });
   } catch (err) {
     console.error("Payment Verification Error:", err.message);
@@ -264,8 +314,23 @@ app.get("/api/v1/alatpay/verify/:reference", verifyToken, async (req, res) => {
     }
 
     if (transactionSuccess) {
-      await User.findByIdAndUpdate(req.user.id, { isSubscribed: true, isPremium: true });
-      return res.status(200).json({ success: true, message: "Payment verified successfully.", data: transactionData });
+      const subscribedAt = new Date();
+      const subscriptionExpiresAt = new Date(subscribedAt.getTime() + THIRTY_DAYS_MS);
+
+      await User.findByIdAndUpdate(req.user.id, {
+        isSubscribed: true,
+        isPremium: true,
+        subscribedAt,
+        subscriptionExpiresAt,
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: "Payment verified successfully.",
+        data: transactionData,
+        expiresAt: subscriptionExpiresAt,
+        subscriptionExpiresAt,
+      });
     }
 
     return res.status(400).json({ success: false, message: "Payment verification failed or pending." });
@@ -289,6 +354,22 @@ app.post("/api/v1/alatpay/webhook", async (req, res) => {
 
     if (payload?.status === "Successful" || payload?.status === true) {
       const transactionRef = payload.reference || payload.orderId;
+      const userEmail = payload.email || payload.customerEmail;
+
+      if (userEmail) {
+        const subscribedAt = new Date();
+        const subscriptionExpiresAt = new Date(subscribedAt.getTime() + THIRTY_DAYS_MS);
+
+        await User.findOneAndUpdate(
+          { email: userEmail.toLowerCase().trim() },
+          {
+            isSubscribed: true,
+            isPremium: true,
+            subscribedAt,
+            subscriptionExpiresAt,
+          }
+        );
+      }
       console.log(`✅ Payment confirmed via Webhook for Reference: ${transactionRef}`);
     }
 
@@ -300,8 +381,31 @@ app.post("/api/v1/alatpay/webhook", async (req, res) => {
 });
 
 // ==========================================
-// PUSH NOTIFICATION LOGIC
+// CRON JOBS
 // ==========================================
+
+// Daily Cron Job: Clean up & auto-downgrade expired PRO subscriptions at midnight
+cron.schedule("0 0 * * *", async () => {
+  try {
+    const result = await User.updateMany(
+      {
+        subscriptionExpiresAt: { $lte: new Date() },
+        $or: [{ isSubscribed: true }, { isPremium: true }],
+      },
+      {
+        $set: { isSubscribed: false, isPremium: false },
+      }
+    );
+
+    if (result.modifiedCount > 0) {
+      console.log(`🧹 Auto-expired ${result.modifiedCount} overdue PRO subscriptions.`);
+    }
+  } catch (err) {
+    console.error("Error executing subscription expiration cleanup:", err.message);
+  }
+});
+
+// Push Notification Reminder Function
 const sendDailyNotifications = async () => {
   try {
     const subs = await PushSubscription.find().populate("userId");
