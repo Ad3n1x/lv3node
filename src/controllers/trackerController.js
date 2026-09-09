@@ -39,40 +39,29 @@ const getTrackerEntries = async (req, res) => {
 };
 
 // 2. THIS FIXES THE "MARK DONE" BUTTON REVERTING (500 ERROR)
+// SIMPLIFIED BACKEND FOR TRUE E2EE
 const updateTracker = async (req, res) => {
   try {
-    // Depending on your route, this might be req.params.trackerId
     const trackerId = req.params.id || req.params.trackerId; 
     const userId = req.user?._id || req.user?.id || req.user?.userId || req.user;
 
-    const tracker = await Tracker.findOne({ _id: trackerId, userId });
+    // The frontend sends an encrypted string: { entries: "u3n2b4i23..." }
+    const { entries } = req.body; 
 
-    if (!tracker) {
+    // Find and update blindly. By passing E2EE strings, we don't need .save() hooks
+    const updatedTracker = await Tracker.findOneAndUpdate(
+      { _id: trackerId, userId },
+      { entries: entries }, // Just replace the string
+      { new: true }
+    );
+
+    if (!updatedTracker) {
       return res.status(404).json({ message: "Tracker not found" });
     }
 
-    // Get the properly decrypted array of current entries
-    let currentEntries = tracker.toJSON().entries || [];
-
-    // Push the new entry from the frontend
-    if (req.body.entry) {
-      currentEntries.push(req.body.entry);
-    } else if (req.body.entries) {
-      currentEntries = req.body.entries;
-    } else {
-      // Default fallback if body is empty for a habit
-      currentEntries.push({ date: new Date().toISOString(), status: "completed" });
-    }
-
-    // Reassign the array to the document
-    tracker.entries = currentEntries;
-
-    // Use .save() instead of findOneAndUpdate so encryption works perfectly
-    await tracker.save();
-
     return res.status(200).json({
       status: "success",
-      data: tracker.toJSON(),
+      data: updatedTracker
     });
   } catch (error) {
     console.error("Error updating tracker:", error);
