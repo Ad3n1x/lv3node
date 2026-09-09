@@ -1,36 +1,32 @@
 const Tracker = require("../models/Tracker");
 
-// 1. THIS FIXES THE ENCRYPTED TEXT ON THE DETAIL PAGE
+// 1. GET TRACKER ENTRIES (FIXED FOR E2EE)
 const getTrackerEntries = async (req, res) => {
   try {
-    const { trackerId } = req.params;
+    // Handle both /:id and /:trackerId route parameters
+    const trackerId = req.params.trackerId || req.params.id; 
     const userId = req.user?._id || req.user?.id || req.user?.userId || req.user;
 
     if (!userId) {
       return res.status(401).json({ message: "Authentication required." });
     }
 
+    // .lean() returns raw data, bypassing any Mongoose model hooks.
+    // This ensures the backend doesn't try to decrypt data that the frontend needs to decrypt.
     const tracker = await Tracker.findOne({
       _id: trackerId,
       userId: userId,
-    });
+    }).lean(); 
 
     if (!tracker) {
       return res.status(404).json({ message: "Tracker not found." });
     }
 
-    // .toJSON() safely runs the decryption we set up in the model
-    const trackerObj = tracker.toJSON();
-
+    // Send the raw, encrypted data straight back to React.
+    // Your frontend's decryptData() will handle turning it back into an array.
     return res.status(200).json({
       status: "success",
-      data: {
-        ...trackerObj, 
-        trackerName: trackerObj.name,
-        unit: trackerObj.unit,
-        target: trackerObj.target,
-        entries: Array.isArray(trackerObj.entries) ? trackerObj.entries : [], 
-      },
+      data: tracker
     });
   } catch (error) {
     console.error("Error in getTrackerEntries:", error);
@@ -38,8 +34,7 @@ const getTrackerEntries = async (req, res) => {
   }
 };
 
-// 2. THIS FIXES THE "MARK DONE" BUTTON REVERTING (500 ERROR)
-// SIMPLIFIED BACKEND FOR TRUE E2EE
+// 2. UPDATE TRACKER (FIXED FOR "MARK DONE" REVERTING)
 const updateTracker = async (req, res) => {
   try {
     const trackerId = req.params.id || req.params.trackerId; 
@@ -52,7 +47,7 @@ const updateTracker = async (req, res) => {
     const updatedTracker = await Tracker.findOneAndUpdate(
       { _id: trackerId, userId },
       { entries: entries }, // Just replace the string
-      { new: true }
+      { new: true, lean: true } // Return raw updated document
     );
 
     if (!updatedTracker) {
@@ -71,5 +66,5 @@ const updateTracker = async (req, res) => {
 
 module.exports = { 
   getTrackerEntries, 
-  updateTracker // Ensure this matches what you import in your routes file!
+  updateTracker 
 };
