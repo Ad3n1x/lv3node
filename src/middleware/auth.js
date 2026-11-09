@@ -8,8 +8,11 @@ const verifyToken = (req, res, next) => {
   }
 
   const token = authHeader.split(" ")[1];
+  if (!process.env.JWT_SECRET) {
+    return res.status(503).json({ message: "Authentication is temporarily unavailable." });
+  }
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || "your_jwt_secret_key");
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
     req.user = decoded; // Sets user details (id, isPremium, etc.) on request
     next();
   } catch (err) {
