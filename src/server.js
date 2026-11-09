@@ -429,11 +429,11 @@ cron.schedule("0 0 * * *", async () => {
   try {
     const result = await User.updateMany(
       {
+        isPremiumRaw: true,
         subscriptionExpiresAt: { $lte: new Date() },
-        $or: [{ isSubscribed: true }, { isPremium: true }],
       },
       {
-        $set: { isSubscribed: false, isPremium: false },
+        $set: { isPremiumRaw: false, subscriptionStatus: "expired" },
       }
     );
 
