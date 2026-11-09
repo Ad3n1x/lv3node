@@ -1,4 +1,5 @@
 const jwt = require("jsonwebtoken");
+const User = require("../models/User");
 
 // 1. Authentication Middleware (Verifies JWT token)
 const verifyToken = (req, res, next) => {
@@ -20,21 +21,26 @@ const verifyToken = (req, res, next) => {
   }
 };
 
-// 2. Premium Guard Middleware (Checks if user is premium)
-const requirePremium = (req, res, next) => {
-  if (!req.user) {
+// 2. Premium Guard Middleware (always checks the database, never JWT flags)
+const requirePremium = async (req, res, next) => {
+  if (!req.user || !req.user.id) {
     return res.status(401).json({ error: "Unauthorized: Please log in first." });
   }
 
-  // Checks both isPremium and isSubscribed flags from the token/user payload
-  if (!req.user.isPremium && !req.user.isSubscribed) {
-    return res.status(403).json({
-      error: "Upgrade to Premium to access this feature.",
-      code: "PREMIUM_REQUIRED",
-    });
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user || !user.isPremium) {
+      return res.status(403).json({
+        error: "Upgrade to Premium to access this feature.",
+        code: "PREMIUM_REQUIRED",
+      });
+    }
+    req.userObj = user;
+    return next();
+  } catch (error) {
+    console.error("Premium access check failed:", error.message);
+    return res.status(500).json({ error: "Unable to verify premium access." });
   }
-
-  next();
 };
 
 // Export both middlewares as a CommonJS module
