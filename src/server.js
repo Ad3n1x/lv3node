@@ -3,6 +3,7 @@ const dns = require("dns");
 const express = require("express");
 const mongoose = require("mongoose");
 const axios = require("axios");
+const crypto = require("crypto");
 
 // Disable Mongoose command buffering globally to prevent hanging queries on DB connection issues
 mongoose.set("bufferCommands", false);
@@ -160,13 +161,13 @@ app.get(["/api/v1/user/status", "/api/user/status"], verifyToken, async (req, re
     }
 
     const now = new Date();
-    let isPremium = Boolean(user.isSubscribed || user.isPremium);
+    let isPremium = Boolean(user.isPremium);
 
     // Enforce server-side 30-day expiration status check
     if (user.subscriptionExpiresAt && new Date(user.subscriptionExpiresAt) <= now) {
       if (isPremium) {
-        user.isSubscribed = false;
-        user.isPremium = false;
+        user.isPremiumRaw = false;
+        user.subscriptionStatus = "expired";
         await user.save();
         isPremium = false;
       }
@@ -211,66 +212,78 @@ app.post("/api/v1/subscribe", verifyToken, async (req, res) => {
 // ==========================================
 const ALATPAY_BASE_URL = process.env.ALATPAY_BASE_URL || "https://alatpay.developer.azure-api.net/alatpay/api/v1";
 
-// Generic Verification Endpoint
-app.post("/api/v1/payments/verify", verifyToken, async (req, res) => {
-  try {
-    const { reference, provider } = req.body;
+// Payment verification is server-authoritative. Client-supplied references alone never grant PRO.
+const ALATPAY_BASE_URL = (process.env.ALATPAY_BASE_URL || "https://alatpay.developer.azure-api.net/alatpay/api/v1").replace(/\/$/, "");
+const ALATPAY_PRO_AMOUNT_NGN = Number(process.env.ALATPAY_PRO_AMOUNT_NGN || 5000);
 
-    if (!reference) {
-      return res.status(400).json({ error: "Transaction reference is required." });
-    }
+const isAlatPayConfigured = () =>
+  Boolean(process.env.ALATPAY_API_KEY && process.env.ALATPAY_BUSINESS_ID &&
+    Number.isFinite(ALATPAY_PRO_AMOUNT_NGN) && ALATPAY_PRO_AMOUNT_NGN > 0);
 
-    if (provider === "alatpay" && process.env.ALATPAY_API_KEY) {
-      try {
-        await axios.get(`${ALATPAY_BASE_URL}/transaction/verify/${reference}`, {
-          headers: { "Ocp-Apim-Subscription-Key": process.env.ALATPAY_API_KEY },
-        });
-      } catch (apiErr) {
-        console.warn("ALATPay direct API check bypassed or returned non-200:", apiErr.message);
-      }
-    }
-
-    const subscribedAt = new Date();
-    const subscriptionExpiresAt = new Date(subscribedAt.getTime() + THIRTY_DAYS_MS);
-
-    await User.findByIdAndUpdate(req.user.id, {
-      isSubscribed: true,
-      isPremium: true,
-      subscribedAt,
-      subscriptionExpiresAt,
-    });
-
-    return res.status(200).json({
-      success: true,
-      message: "Payment verified successfully.",
-      isPremium: true,
-      expiresAt: subscriptionExpiresAt,
-      subscriptionExpiresAt,
-    });
-  } catch (err) {
-    console.error("Payment Verification Error:", err.message);
-    return res.status(500).json({ error: "Failed to verify transaction status." });
+const verifyAlatPayWithProvider = async (reference) => {
+  if (!isAlatPayConfigured()) {
+    const error = new Error("ALATPay is not configured on the server.");
+    error.statusCode = 503;
+    throw error;
   }
+
+  const response = await axios.get(
+    `${ALATPAY_BASE_URL}/transaction/verify/${encodeURIComponent(reference)}`,
+    {
+      headers: { "Ocp-Apim-Subscription-Key": process.env.ALATPAY_API_KEY },
+      timeout: 15000,
+    }
+  );
+
+  const root = response.data || {};
+  const transaction = root.data?.data || root.data || root;
+  const status = transaction.status ?? root.status;
+  const paidReference = transaction.reference || transaction.orderId ||
+    transaction.paymentReference || transaction.paymentreference;
+
+  const amount = Number(transaction.amount ?? transaction.amountPaid ?? transaction.totalAmount);
+  const currency = String(transaction.currency || transaction.currencyCode || "").toUpperCase();
+
+  const valid =
+    (status === "Successful" || status === true) &&
+    paidReference === reference &&
+    amount === ALATPAY_PRO_AMOUNT_NGN &&
+    currency === "NGN" &&
+    transaction.businessId === process.env.ALATPAY_BUSINESS_ID;
+
+  return { valid, transaction };
+};
+
+// Legacy generic endpoint is deliberately disabled: it previously upgraded accounts
+// from a caller-provided reference without requiring a successful provider verification.
+app.post("/api/v1/payments/verify", verifyToken, async (req, res) => {
+  return res.status(410).json({
+    success: false,
+    code: "PAYMENT_VERIFICATION_MOVED",
+    error: "Use the secure ALATPay verification flow.",
+  });
 });
 
-// 1. Initialize ALATPay Transaction
+// Initialize a fixed-price NGN checkout. Never trust the amount or reference from the browser.
 app.post("/api/v1/alatpay/initialize", verifyToken, async (req, res) => {
   try {
-    const { amount, reference } = req.body;
-    const user = await User.findById(req.user.id);
-
-    if (!user) {
-      return res.status(404).json({ error: "User not found." });
+    if (!isAlatPayConfigured()) {
+      return res.status(503).json({ success: false, error: "Secure payment checkout is not configured." });
     }
 
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ error: "User not found." });
+
+    const reference = `UT_${Date.now()}_${crypto.randomBytes(8).toString("hex")}`;
+    const amount = ALATPAY_PRO_AMOUNT_NGN;
     const payload = {
       businessId: process.env.ALATPAY_BUSINESS_ID,
-      amount: amount,
+      amount,
       currency: "NGN",
       email: user.email,
       customerName: user.name || "UniTrack Customer",
-      reference: reference || `UT_${Date.now()}_${req.user.id.slice(-4)}`,
-      callbackUrl: `${process.env.FRONTEND_URL || "http://localhost:3000"}/payment/callback`,
+      reference,
+      callbackUrl: `${process.env.FRONTEND_URL || "https://unitrack-app.vercel.app"}/payment/callback`,
     };
 
     const response = await axios.post(`${ALATPAY_BASE_URL}/transaction/initialize`, payload, {
@@ -278,104 +291,131 @@ app.post("/api/v1/alatpay/initialize", verifyToken, async (req, res) => {
         "Ocp-Apim-Subscription-Key": process.env.ALATPAY_API_KEY,
         "Content-Type": "application/json",
       },
+      timeout: 15000,
     });
 
-    return res.status(200).json({ success: true, data: response.data });
+    if (response.data?.status === false) {
+      return res.status(502).json({ success: false, error: "Payment provider rejected checkout initialization." });
+    }
+
+    await User.findByIdAndUpdate(user._id, {
+      pendingPaymentReference: reference,
+      pendingPaymentAmount: amount,
+      pendingPaymentCurrency: "NGN",
+      pendingPaymentCreatedAt: new Date(),
+    });
+
+    return res.status(200).json({ success: true, reference, amount, currency: "NGN", data: response.data });
   } catch (err) {
-    console.error("ALATPay Initialization Error:", err.response?.data || err.message);
-    return res.status(500).json({
+    console.error("ALATPay Initialization Error:", err.response?.status || err.message);
+    return res.status(err.statusCode || 502).json({
+      success: false,
       error: "Failed to initialize payment with ALATPay.",
-      details: err.response?.data || err.message,
     });
   }
 });
 
-// 2. Verify ALATPay Transaction Status (Direct Ref Param)
+// Verify the exact pending payment created for this signed-in user.
 app.get("/api/v1/alatpay/verify/:reference", verifyToken, async (req, res) => {
   try {
-    const { reference } = req.params;
-
-    let transactionSuccess = false;
-    let transactionData = null;
-
-    try {
-      const response = await axios.get(`${ALATPAY_BASE_URL}/transaction/verify/${reference}`, {
-        headers: {
-          "Ocp-Apim-Subscription-Key": process.env.ALATPAY_API_KEY,
-        },
-      });
-      transactionData = response.data;
-      if (transactionData?.status === "Successful" || transactionData?.status === true) {
-        transactionSuccess = true;
-      }
-    } catch (apiErr) {
-      console.warn("External ALATPay verification API failed, trusting frontend reference fallback:", apiErr.message);
-      transactionSuccess = true;
+    if (!isAlatPayConfigured()) {
+      return res.status(503).json({ success: false, error: "Payment verification is not configured." });
     }
 
-    if (transactionSuccess) {
-      const subscribedAt = new Date();
-      const subscriptionExpiresAt = new Date(subscribedAt.getTime() + THIRTY_DAYS_MS);
+    const reference = String(req.params.reference || "");
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ error: "User not found." });
 
-      await User.findByIdAndUpdate(req.user.id, {
-        isSubscribed: true,
-        isPremium: true,
-        subscribedAt,
-        subscriptionExpiresAt,
-      });
+    const pendingAge = user.pendingPaymentCreatedAt
+      ? Date.now() - new Date(user.pendingPaymentCreatedAt).getTime()
+      : Infinity;
 
-      return res.status(200).json({
-        success: true,
-        message: "Payment verified successfully.",
-        data: transactionData,
-        expiresAt: subscriptionExpiresAt,
-        subscriptionExpiresAt,
-      });
+    if (!reference || reference !== user.pendingPaymentReference ||
+        user.pendingPaymentAmount !== ALATPAY_PRO_AMOUNT_NGN ||
+        user.pendingPaymentCurrency !== "NGN" || pendingAge < 0 || pendingAge > 30 * 60 * 1000) {
+      return res.status(400).json({ success: false, message: "No matching active checkout was found." });
     }
 
-    return res.status(400).json({ success: false, message: "Payment verification failed or pending." });
+    const result = await verifyAlatPayWithProvider(reference);
+    if (!result.valid) {
+      return res.status(400).json({ success: false, message: "Payment is not confirmed or does not match this checkout." });
+    }
+
+    const subscribedAt = new Date();
+    const subscriptionExpiresAt = new Date(subscribedAt.getTime() + THIRTY_DAYS_MS);
+    await User.findByIdAndUpdate(user._id, {
+      isPremiumRaw: true,
+      subscriptionStatus: "active",
+      subscribedAt,
+      subscriptionExpiresAt,
+      pendingPaymentReference: null,
+      pendingPaymentAmount: null,
+      pendingPaymentCurrency: null,
+      pendingPaymentCreatedAt: null,
+    });
+
+    return res.status(200).json({
+      success: true,
+      isPremium: true,
+      message: "Payment verified successfully.",
+      expiresAt: subscriptionExpiresAt,
+      subscriptionExpiresAt,
+    });
   } catch (err) {
-    console.error("ALATPay Verification Error:", err.response?.data || err.message);
-    return res.status(500).json({ error: "Failed to verify transaction status." });
+    console.error("ALATPay Verification Error:", err.response?.status || err.message);
+    return res.status(err.statusCode || 502).json({
+      success: false,
+      error: "Unable to verify payment with the provider. PRO access has not been activated.",
+    });
   }
 });
 
-// 3. Webhook Listener
+// ALATPay callbacks are accepted only when a webhook secret is configured and the
+// matching pending transaction is independently verified against ALATPay.
 app.post("/api/v1/alatpay/webhook", async (req, res) => {
   try {
-    const payload = req.body;
-    console.log("🔔 ALATPay Webhook Received:", JSON.stringify(payload, null, 2));
-
+    const webhookSecret = process.env.ALATPAY_WEBHOOK_SECRET;
     const incomingSignature = req.headers["x-alatpay-signature"];
-    if (process.env.ALATPAY_WEBHOOK_SECRET && incomingSignature !== process.env.ALATPAY_WEBHOOK_SECRET) {
-      console.warn("⚠️ Unauthorized ALATPay Webhook signature.");
-      return res.status(401).json({ error: "Unauthorized" });
+
+    if (!webhookSecret) {
+      return res.status(503).json({ error: "Webhook verification is not configured." });
+    }
+    if (typeof incomingSignature !== "string") {
+      return res.status(401).json({ error: "Unauthorized." });
     }
 
-    if (payload?.status === "Successful" || payload?.status === true) {
-      const transactionRef = payload.reference || payload.orderId;
-      const userEmail = payload.email || payload.customerEmail;
-
-      if (userEmail) {
-        const subscribedAt = new Date();
-        const subscriptionExpiresAt = new Date(subscribedAt.getTime() + THIRTY_DAYS_MS);
-
-        await User.findOneAndUpdate(
-          { email: userEmail.toLowerCase().trim() },
-          {
-            isSubscribed: true,
-            isPremium: true,
-            subscribedAt,
-            subscriptionExpiresAt,
-          }
-        );
-      }
-      console.log(`✅ Payment confirmed via Webhook for Reference: ${transactionRef}`);
+    const expected = Buffer.from(webhookSecret);
+    const received = Buffer.from(incomingSignature);
+    if (expected.length !== received.length || !crypto.timingSafeEqual(expected, received)) {
+      return res.status(401).json({ error: "Unauthorized." });
     }
+
+    const payload = req.body || {};
+    const reference = payload.reference || payload.orderId || payload.paymentreference;
+    if (!reference) return res.status(400).json({ error: "Transaction reference is required." });
+
+    const user = await User.findOne({ pendingPaymentReference: reference });
+    if (!user) return res.status(200).json({ status: "ACK" });
+
+    const result = await verifyAlatPayWithProvider(reference);
+    if (!result.valid) return res.status(200).json({ status: "PENDING" });
+
+    const subscribedAt = new Date();
+    const subscriptionExpiresAt = new Date(subscribedAt.getTime() + THIRTY_DAYS_MS);
+    await User.findByIdAndUpdate(user._id, {
+      isPremiumRaw: true,
+      subscriptionStatus: "active",
+      subscribedAt,
+      subscriptionExpiresAt,
+      pendingPaymentReference: null,
+      pendingPaymentAmount: null,
+      pendingPaymentCurrency: null,
+      pendingPaymentCreatedAt: null,
+    });
 
     return res.status(200).json({ status: "ACK" });
   } catch (err) {
-    console.error("Webhook Processing Error:", err.message);
+    console.error("ALATPay Webhook Error:", err.response?.status || err.message);
     return res.status(500).json({ error: "Webhook processing error." });
   }
 });
