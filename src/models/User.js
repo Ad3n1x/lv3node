@@ -2,7 +2,10 @@ const mongoose = require("mongoose");
 const CryptoJS = require("crypto-js");
 
 // Environment Secret Key for AES Encryption
-const SECRET_KEY = process.env.ENCRYPTION_KEY || "your_fallback_super_secret_key_32_bytes";
+const SECRET_KEY = process.env.ENCRYPTION_KEY;
+if (!SECRET_KEY) {
+  throw new Error("ENCRYPTION_KEY must be configured before the API can start.");
+}
 
 // ==========================================
 // HELPER ENCRYPTION & DECRYPTION FUNCTIONS
