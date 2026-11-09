@@ -212,7 +212,10 @@ router.post("/verify-otp", otpLimiter, async (req, res) => {
     user.otpExpires = undefined;
     await user.save();
 
-    const secret = process.env.JWT_SECRET || "fallback_development_secret_key";
+    if (!process.env.JWT_SECRET) {
+      return res.status(503).json({ message: "Authentication is temporarily unavailable." });
+    }
+    const secret = process.env.JWT_SECRET;
     const token = jwt.sign(
       { id: user._id, email: user.email },
       secret,
@@ -265,7 +268,10 @@ router.post("/login", authLimiter, async (req, res) => {
       return res.status(401).json({ message: "Invalid credentials." });
     }
 
-    const secret = process.env.JWT_SECRET || "fallback_development_secret_key";
+    if (!process.env.JWT_SECRET) {
+      return res.status(503).json({ message: "Authentication is temporarily unavailable." });
+    }
+    const secret = process.env.JWT_SECRET;
     const token = jwt.sign(
       { id: user._id, email: user.email },
       secret,
