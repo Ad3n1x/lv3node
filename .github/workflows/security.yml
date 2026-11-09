@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 jobs:
-  audit-and-syntax:
+  dependency-audit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,8 +22,18 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Dependency audit
+      - name: Dependency audit (known vulnerabilities must be reviewed)
         run: npm audit --audit-level=high
+
+  syntax-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
       - name: Check backend JavaScript syntax
         run: |
           find src -type f -name '*.js' -print0 | xargs -0 -n1 node --check
