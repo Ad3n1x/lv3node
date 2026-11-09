@@ -9,6 +9,7 @@ on:
     - cron: "23 7 * * 1"
   workflow_dispatch:
 
+# Re-check the current dependency graph after the compatible patch refresh.
 # Keep dependency and application checks independent so one failure never masks the other.
 permissions:
   contents: read
