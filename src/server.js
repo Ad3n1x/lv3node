@@ -225,8 +225,6 @@ app.post("/api/v1/subscribe", verifyToken, async (req, res) => {
 // ==========================================
 // ALATPAY INTEGRATION ROUTES
 // ==========================================
-const ALATPAY_BASE_URL = process.env.ALATPAY_BASE_URL || "https://alatpay.developer.azure-api.net/alatpay/api/v1";
-
 // Payment verification is server-authoritative. Client-supplied references alone never grant PRO.
 const ALATPAY_BASE_URL = (process.env.ALATPAY_BASE_URL || "https://alatpay.developer.azure-api.net/alatpay/api/v1").replace(/\/$/, "");
 const ALATPAY_PRO_AMOUNT_NGN = Number(process.env.ALATPAY_PRO_AMOUNT_NGN || 5000);
