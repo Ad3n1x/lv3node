@@ -50,13 +50,13 @@ const requirePremium = async (req, res, next) => {
     const now = new Date();
     const isExpired = user.subscriptionExpiresAt && new Date(user.subscriptionExpiresAt) <= now;
 
-    if (isExpired && (user.isPremium || user.isSubscribed)) {
-      user.isPremium = false;
-      user.isSubscribed = false;
+    if (isExpired && user.isPremium) {
+      user.isPremiumRaw = false;
+      user.subscriptionStatus = "expired";
       await user.save();
     }
 
-    if (!user.isPremium && !user.isSubscribed) {
+    if (!user.isPremium) {
       return res.status(403).json({
         error: "Forbidden: Active 30-day premium subscription required.",
         code: "PREMIUM_REQUIRED",
