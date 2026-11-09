@@ -6,6 +6,7 @@ on:
     paths:
       - package.json
       - package-lock.json
+      - .github/workflows/dependency-remediation.yml
   workflow_dispatch:
 
 permissions:
@@ -26,6 +27,8 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Synchronize lockfile with declared dependency versions
+        run: npm install --package-lock-only --ignore-scripts
       - run: npm ci
       - name: Apply non-breaking security updates
         run: |
