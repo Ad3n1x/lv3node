@@ -485,8 +485,7 @@ const sendDailyNotifications = async () => {
 
 // Cron Job: Daily Push Notification Alert at 8:00 PM (WAT)
 cron.schedule("0 20 * * *", sendDailyNotifications, {
-  scheduled: true,
-  timezone: "Africa/Lagos", 
+  timezone: "Africa/Lagos",
 });
 
 // Manual Trigger Endpoint for External Cron Jobs
