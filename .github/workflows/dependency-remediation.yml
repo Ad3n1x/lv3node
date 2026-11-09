@@ -28,7 +28,8 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Apply non-breaking security updates
-        run: npm audit fix
+        run: |
+          npm audit fix || echo "Some vulnerabilities need a deliberate major-version review; preserving compatible updates."
       - name: Commit updated dependency resolutions
         run: |
           if ! git diff --quiet -- package.json package-lock.json; then
