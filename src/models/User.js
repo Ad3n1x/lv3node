@@ -59,6 +59,11 @@ const userSchema = new mongoose.Schema(
     subscriptionExpiresAt: { type: Date, default: null },
     subscriptionId: { type: String, default: null },
     stripeCustomerId: { type: String, default: null },
+    subscribedAt: { type: Date, default: null },
+    pendingPaymentReference: { type: String, default: null },
+    pendingPaymentAmount: { type: Number, default: null },
+    pendingPaymentCurrency: { type: String, default: null },
+    pendingPaymentCreatedAt: { type: Date, default: null },
   },
   { 
     timestamps: true,
