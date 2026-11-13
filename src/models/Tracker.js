@@ -1,18 +1,25 @@
 const mongoose = require("mongoose");
-const CryptoJS = require("crypto-js");
 
-// Use the same client secret or environment secret
-const SERVER_SECRET = process.env.ENCRYPTION_SECRET || "your_client_side_encryption_secret";
+const activitySchema = new mongoose.Schema({
+  type: { type: String, required: true, maxlength: 40 },
+  label: { type: String, required: true, maxlength: 120 },
+  at: { type: Date, default: Date.now, index: true },
+}, { _id: true });
 
 const trackerSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, required: true, ref: "User" },
+  userId: { type: mongoose.Schema.Types.ObjectId, required: true, ref: "User", index: true },
   name: { type: String, required: true, trim: true },
-  type: { type: String, required: true },
-  icon: { type: String },
-  color: { type: String },
+  type: { type: String, required: true, trim: true, maxlength: 40 },
+  icon: { type: String, maxlength: 60 },
+  color: { type: String, maxlength: 32 },
   target: { type: mongoose.Schema.Types.Mixed },
-  unit: { type: String },
+  unit: { type: String, maxlength: 40 },
   entries: { type: mongoose.Schema.Types.Mixed, default: [] },
+  archivedAt: { type: Date, default: null, index: true },
+  deletedAt: { type: Date, default: null, index: true },
+  activity: { type: [activitySchema], default: [] },
 }, { timestamps: true });
 
-module.exports = mongoose.model("Tracker", trackerSchema);
+trackerSchema.index({ userId: 1, deletedAt: 1, archivedAt: 1, updatedAt: -1 });
+
+module.exports = mongoose.models.Tracker || mongoose.model("Tracker", trackerSchema);
