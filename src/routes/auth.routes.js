@@ -316,11 +316,21 @@ router.post("/login", authLimiter, async (req, res) => {
 router.post("/public-key", verifyToken, async (req, res) => {
   try {
     const { publicKey } = req.body;
-    if (!publicKey) {
-      return res.status(400).json({ message: "Public key is required." });
+    if (typeof publicKey !== "string" || !publicKey.trim()) {
+      return res.status(400).json({ message: "A serialized public JWK is required." });
     }
 
-    await User.findByIdAndUpdate(req.user.id, { publicKey: String(publicKey).trim() });
+    let parsedKey;
+    try {
+      parsedKey = JSON.parse(publicKey);
+    } catch {
+      return res.status(400).json({ message: "Public key must be valid JSON." });
+    }
+    if (parsedKey?.kty !== "RSA" || typeof parsedKey?.n !== "string" || typeof parsedKey?.e !== "string") {
+      return res.status(400).json({ message: "Invalid RSA public key." });
+    }
+
+    await User.findByIdAndUpdate(req.user.id, { publicKey: JSON.stringify(parsedKey) });
     return res.status(200).json({ message: "Public key saved successfully." });
   } catch (err) {
     console.error("❌ Public Key Endpoint Error:", err);
