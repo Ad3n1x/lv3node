@@ -8,7 +8,7 @@ const activitySchema = new mongoose.Schema({
 
 const trackerSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, required: true, ref: "User", index: true },
-  name: { type: String, required: true, trim: true },
+  name: { type: mongoose.Schema.Types.Mixed, required: true },
   type: { type: String, required: true, trim: true, maxlength: 40 },
   icon: { type: String, maxlength: 60 },
   color: { type: String, maxlength: 32 },
