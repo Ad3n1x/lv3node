@@ -1,0 +1,21 @@
+name: UNI-TRACK API CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Check backend JavaScript syntax
+        run: find src -path 'src/node_modules' -prune -o -name '*.js' -print0 | xargs -0 -n1 node --check
