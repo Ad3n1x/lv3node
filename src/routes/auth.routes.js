@@ -5,12 +5,27 @@ const jwt = require("jsonwebtoken");
 const rateLimit = require("express-rate-limit");
 const { BrevoClient } = require("@getbrevo/brevo");
 const User = require("../models/User");
+const Session = require("../models/Session");
 
 // FIXED: Destructured verifyToken to ensure it resolves to a function, not an object
 const middleware = require("../middleware/auth");
 const verifyToken = typeof middleware === "function" ? middleware : middleware.verifyToken;
 
 const router = express.Router();
+
+const createUserSession = async (user, req) => {
+  if (!process.env.JWT_SECRET) throw new Error("JWT_SECRET is not configured.");
+  const jti = crypto.randomUUID();
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+  await Session.create({
+    userId: user._id,
+    jti,
+    userAgent: String(req.get("user-agent") || "Unknown device").slice(0, 300),
+    ipAddress: String(req.ip || req.socket?.remoteAddress || "Unknown").slice(0, 80),
+    expiresAt,
+  });
+  return jwt.sign({ id: user._id, email: user.email, jti }, process.env.JWT_SECRET, { expiresIn: "7d" });
+};
 
 const generateOtp = () => crypto.randomInt(100000, 1000000).toString();
 const hashOtp = (value) => {
@@ -231,12 +246,7 @@ router.post("/verify-otp", otpLimiter, async (req, res) => {
     if (!process.env.JWT_SECRET) {
       return res.status(503).json({ message: "Authentication is temporarily unavailable." });
     }
-    const secret = process.env.JWT_SECRET;
-    const token = jwt.sign(
-      { id: user._id, email: user.email },
-      secret,
-      { expiresIn: "7d" }
-    );
+    const token = await createUserSession(user, req);
 
     return res.status(200).json({
       token,
@@ -287,12 +297,7 @@ router.post("/login", authLimiter, async (req, res) => {
     if (!process.env.JWT_SECRET) {
       return res.status(503).json({ message: "Authentication is temporarily unavailable." });
     }
-    const secret = process.env.JWT_SECRET;
-    const token = jwt.sign(
-      { id: user._id, email: user.email },
-      secret,
-      { expiresIn: "7d" }
-    );
+    const token = await createUserSession(user, req);
 
     return res.status(200).json({
       token,
@@ -421,6 +426,54 @@ router.post("/reset-password", authLimiter, async (req, res) => {
 // ==========================================
 // 7. GET /api/v1/auth/me
 // ==========================================
+
+/** List active signed-in sessions for this account. */
+router.get("/sessions", verifyToken, async (req, res) => {
+  try {
+    const sessions = await Session.find({ userId: req.user.id, revokedAt: null, expiresAt: { $gt: new Date() } })
+      .sort({ lastSeenAt: -1 }).select("userAgent ipAddress createdAt lastSeenAt expiresAt jti").lean();
+    return res.json({ sessions: sessions.map((session) => ({
+      id: session._id, device: session.userAgent, ipAddress: session.ipAddress,
+      createdAt: session.createdAt, lastSeenAt: session.lastSeenAt, expiresAt: session.expiresAt,
+      isCurrent: session.jti === req.user.jti,
+    })) });
+  } catch (err) {
+    console.error("List sessions error:", err);
+    return res.status(500).json({ message: "Could not load active sessions." });
+  }
+});
+
+router.post("/logout", verifyToken, async (req, res) => {
+  try {
+    if (req.user.jti) await Session.updateOne({ userId: req.user.id, jti: req.user.jti, revokedAt: null }, { $set: { revokedAt: new Date() } });
+    return res.json({ message: "This session has been signed out." });
+  } catch {
+    return res.status(500).json({ message: "Could not sign out this session." });
+  }
+});
+
+router.post("/logout-all", verifyToken, async (req, res) => {
+  try {
+    await Session.updateMany({ userId: req.user.id, revokedAt: null }, { $set: { revokedAt: new Date() } });
+    return res.json({ message: "All active sessions have been signed out." });
+  } catch {
+    return res.status(500).json({ message: "Could not sign out all sessions." });
+  }
+});
+
+router.delete("/sessions/:sessionId", verifyToken, async (req, res) => {
+  try {
+    const session = await Session.findOneAndUpdate(
+      { _id: req.params.sessionId, userId: req.user.id, revokedAt: null },
+      { $set: { revokedAt: new Date() } }, { new: true }
+    );
+    if (!session) return res.status(404).json({ message: "Active session not found." });
+    return res.json({ message: "Session revoked." });
+  } catch {
+    return res.status(500).json({ message: "Could not revoke session." });
+  }
+});
+
 router.get("/me", verifyToken, async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select("-password");
