@@ -299,6 +299,46 @@ router.post("/login", authLimiter, async (req, res) => {
 // ==========================================
 // 4. POST /api/v1/auth/public-key
 // ==========================================
+router.get("/public-key", verifyToken, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select("publicKey");
+    if (!user) return res.status(404).json({ message: "User not found." });
+    return res.json({ publicKey: user.publicKey || null });
+  } catch (err) {
+    console.error("Get public key error:", err);
+    return res.status(500).json({ message: "Could not retrieve public key." });
+  }
+});
+
+router.get("/key-vault/recovery", verifyToken, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select("privateKeyRecovery");
+    if (!user) return res.status(404).json({ message: "User not found." });
+    return res.json({ envelope: user.privateKeyRecovery || null });
+  } catch (err) {
+    console.error("Get key recovery envelope error:", err);
+    return res.status(500).json({ message: "Could not retrieve recovery envelope." });
+  }
+});
+
+router.post("/key-vault/recovery", verifyToken, async (req, res) => {
+  try {
+    const envelope = req.body?.envelope;
+    if (!envelope || envelope.version !== 2 || envelope.kdf !== "PBKDF2-SHA256" ||
+        !["salt", "iv", "ciphertext"].every((key) => typeof envelope[key] === "string" && envelope[key].length <= 12000)) {
+      return res.status(400).json({ message: "Invalid encrypted recovery envelope." });
+    }
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ message: "User not found." });
+    user.privateKeyRecovery = envelope;
+    await user.save();
+    return res.status(200).json({ message: "Encrypted recovery envelope saved." });
+  } catch (err) {
+    console.error("Save key recovery envelope error:", err);
+    return res.status(500).json({ message: "Could not save recovery envelope." });
+  }
+});
+
 router.post("/public-key", verifyToken, async (req, res) => {
   try {
     const { publicKey } = req.body;
