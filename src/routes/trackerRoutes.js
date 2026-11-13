@@ -14,6 +14,12 @@ const requirePro = typeof rawRequirePro === "function"
   : (rawRequirePro.requirePro || rawRequirePro.default);
 
 const router = express.Router();
+
+const appendActivity = (tracker, type, label) => {
+  tracker.activity = Array.isArray(tracker.activity) ? tracker.activity : [];
+  tracker.activity.push({ type, label, at: new Date() });
+  if (tracker.activity.length > 100) tracker.activity = tracker.activity.slice(-100);
+};
 const auth = verifyToken; // Alias for compatibility across all routes
 
 // 🛡️ Helper: Safely extracts user ID from any JWT payload structure
@@ -37,7 +43,11 @@ router.get("/", verifyToken, async (req, res) => {
     const userId = getUserId(req);
     if (!userId) return res.status(401).json({ message: "Unauthorized: Invalid user session." });
 
-    const trackers = await Tracker.find({ userId }).sort({ createdAt: -1 });
+    const includeArchived = req.query.includeArchived === "true";
+    const includeDeleted = req.query.includeDeleted === "true";
+    const filter = { userId, deletedAt: includeDeleted ? { $ne: null } : null };
+    if (!includeArchived) filter.archivedAt = null;
+    const trackers = await Tracker.find(filter).sort({ updatedAt: -1 }).limit(500);
     return res.status(200).json(trackers.map((t) => formatTracker(t)));
   } catch (err) {
     return res.status(500).json({ message: "Error retrieving trackers.", error: err.message });
@@ -55,7 +65,7 @@ router.get("/:id", verifyToken, async (req, res) => {
       return res.status(400).json({ message: "Invalid tracker ID format." });
     }
 
-    const tracker = await Tracker.findOne({ _id: id, userId });
+    const tracker = await Tracker.findOne({ _id: id, userId, deletedAt: null });
     if (!tracker) {
       return res.status(404).json({ message: "Tracker not found or unauthorized." });
     }
@@ -155,7 +165,7 @@ router.put("/:id", verifyToken, async (req, res) => {
 
     const body = req.body || {};
 
-    if (body.name !== undefined) tracker.name = body.name.trim();
+    const changedFields = ["name", "type", "icon", "color", "target", "unit"].filter((key) => body[key] !== undefined);\n    if (body.name !== undefined) tracker.name = String(body.name).trim();
     if (body.type !== undefined) tracker.type = body.type;
     if (body.icon !== undefined) tracker.icon = body.icon;
     if (body.color !== undefined) tracker.color = body.color;
@@ -193,13 +203,103 @@ router.delete("/:id", verifyToken, async (req, res) => {
       return res.status(400).json({ message: "Invalid tracker ID format." });
     }
 
-    const tracker = await Tracker.findOneAndDelete({ _id: id, userId });
+    const tracker = await Tracker.findOne({ _id: id, userId, deletedAt: null });
     if (!tracker) return res.status(404).json({ message: "Tracker not found or unauthorized." });
 
-    return res.status(200).json({ message: "Tracker deleted successfully.", id });
+    tracker.deletedAt = new Date();
+    appendActivity(tracker, "deleted", "Tracker moved to recently deleted");
+    await tracker.save();
+
+    return res.status(200).json({ message: "Tracker moved to recently deleted.", id, deletedAt: tracker.deletedAt });
   } catch (err) {
     console.error("Failed to delete tracker:", err);
     return res.status(500).json({ message: "Failed to delete tracker.", error: err.message });
+  }
+});
+
+
+/** Archive a tracker without deleting its history. */
+router.post("/:id/archive", verifyToken, async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const { id } = req.params;
+    if (!userId) return res.status(401).json({ message: "Unauthorized." });
+    if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ message: "Invalid tracker ID." });
+    const tracker = await Tracker.findOne({ _id: id, userId, deletedAt: null });
+    if (!tracker) return res.status(404).json({ message: "Tracker not found." });
+    if (!tracker.archivedAt) {
+      tracker.archivedAt = new Date();
+      appendActivity(tracker, "archived", "Tracker archived");
+      await tracker.save();
+    }
+    return res.status(200).json({ message: "Tracker archived.", tracker: formatTracker(tracker) });
+  } catch (err) {
+    console.error("Archive tracker error:", err);
+    return res.status(500).json({ message: "Could not archive tracker." });
+  }
+});
+
+/** Restore a tracker from archive or recently deleted. */
+router.post("/:id/restore", verifyToken, async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const { id } = req.params;
+    if (!userId) return res.status(401).json({ message: "Unauthorized." });
+    if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ message: "Invalid tracker ID." });
+    const tracker = await Tracker.findOne({ _id: id, userId, deletedAt: { $ne: null } }).or([
+      { archivedAt: { $ne: null }, deletedAt: null },
+      { deletedAt: { $ne: null } },
+    ]);
+    if (!tracker) return res.status(404).json({ message: "Restorable tracker not found." });
+    tracker.deletedAt = null;
+    tracker.archivedAt = null;
+    appendActivity(tracker, "restored", "Tracker restored");
+    await tracker.save();
+    return res.status(200).json({ message: "Tracker restored.", tracker: formatTracker(tracker) });
+  } catch (err) {
+    console.error("Restore tracker error:", err);
+    return res.status(500).json({ message: "Could not restore tracker." });
+  }
+});
+
+/** Read metadata-only activity. Never return tracker content in the audit stream. */
+router.get("/activity/recent", verifyToken, async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ message: "Unauthorized." });
+    const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || 30, 1), 100);
+    const trackers = await Tracker.find({ userId, deletedAt: null })
+      .select("_id name activity updatedAt")
+      .sort({ updatedAt: -1 })
+      .limit(500)
+      .lean();
+    const activity = trackers.flatMap((tracker) => (tracker.activity || []).map((event) => ({
+      trackerId: tracker._id,
+      trackerName: tracker.name,
+      type: event.type,
+      label: event.label,
+      at: event.at,
+    }))).sort((a, b) => new Date(b.at) - new Date(a.at)).slice(0, limit);
+    return res.status(200).json({ activity });
+  } catch (err) {
+    console.error("Recent activity error:", err);
+    return res.status(500).json({ message: "Could not load activity." });
+  }
+});
+
+/** List the signed-in user's archived or recently deleted trackers. */
+router.get("/recovery/list", verifyToken, async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ message: "Unauthorized." });
+    const trackers = await Tracker.find({
+      userId,
+      $or: [{ archivedAt: { $ne: null }, deletedAt: null }, { deletedAt: { $ne: null } }],
+    }).sort({ updatedAt: -1 }).limit(200);
+    return res.status(200).json({ trackers: trackers.map(formatTracker) });
+  } catch (err) {
+    console.error("Recovery list error:", err);
+    return res.status(500).json({ message: "Could not load archived items." });
   }
 });
 
