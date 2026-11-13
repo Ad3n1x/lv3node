@@ -1,5 +1,6 @@
 const express = require("express");
 const bcrypt = require("bcryptjs");
+const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
 const rateLimit = require("express-rate-limit");
 const { BrevoClient } = require("@getbrevo/brevo");
@@ -10,6 +11,21 @@ const middleware = require("../middleware/auth");
 const verifyToken = typeof middleware === "function" ? middleware : middleware.verifyToken;
 
 const router = express.Router();
+
+const generateOtp = () => crypto.randomInt(100000, 1000000).toString();
+const hashOtp = (value) => crypto.createHash("sha256").update(String(value)).digest("hex");
+const otpMatches = (stored, candidate) => {
+  if (typeof stored !== "string") return false;
+  const candidateHash = hashOtp(candidate);
+  if (stored.length === candidateHash.length) {
+    return crypto.timingSafeEqual(Buffer.from(stored), Buffer.from(candidateHash));
+  }
+  // Temporary compatibility for unexpired OTPs issued before this deployment.
+  return stored === String(candidate);
+};
+const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+}[char]));
 
 // ==========================================
 // BREVO HTTP API CLIENT INITIALIZATION
@@ -59,9 +75,7 @@ const sendBrevoMailWithRetry = async (emailParams, retries = 3, delay = 2000) =>
 // ==========================================
 const sendOtpEmail = async (toEmail, firstName, otp, subjectTitle) => {
   if (!process.env.BREVO_API_KEY || !process.env.SENDER_EMAIL) {
-    console.warn("⚠️ [Config Warning] BREVO_API_KEY or SENDER_EMAIL missing in environment.");
-    console.log(`🔑 [DEV MODE OTP] Destination: ${toEmail} | Code: ${otp}`);
-    return;
+    throw new Error("Transactional email is not configured.");
   }
 
   const emailParams = {
@@ -79,7 +93,7 @@ const sendOtpEmail = async (toEmail, firstName, otp, subjectTitle) => {
             <p style="margin: 8px 0 0 0; font-size: 14px; opacity: 0.9;">Secure Account Verification</p>
           </div>
           <div style="padding: 35px 30px; text-align: left; color: #495057;">
-            <p style="margin-top: 0; font-size: 16px; font-weight: 500;">Hello <strong>${firstName}</strong>,</p>
+            <p style="margin-top: 0; font-size: 16px; font-weight: 500;">Hello <strong>${escapeHtml(firstName)}</strong>,</p>
             <p style="font-size: 15px; line-height: 1.5; color: #6c757d;">
               Use the secure verification code below to complete your action. This code expires in <strong>10 minutes</strong>.
             </p>
@@ -100,10 +114,8 @@ const sendOtpEmail = async (toEmail, firstName, otp, subjectTitle) => {
     `,
   };
 
-  // Non-blocking asynchronous dispatch
-  sendBrevoMailWithRetry(emailParams).catch((err) => {
-    console.error(`❌ [Critical Email Failure] Failed to send OTP via Brevo to ${toEmail}:`, err.stack || err);
-  });
+  // Await provider acknowledgement so the API never reports success before dispatch.
+  await sendBrevoMailWithRetry(emailParams);
 };
 
 // ==========================================
@@ -136,14 +148,14 @@ router.post("/register", authLimiter, async (req, res) => {
     }
 
     const hashedPassword = await bcrypt.hash(cleanPassword, 10);
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otp = generateOtp();
     const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 mins
 
     if (existingUser && !existingUser.isVerified) {
       existingUser.firstName = firstName;
       existingUser.lastName = lastName;
       existingUser.password = hashedPassword;
-      existingUser.otp = otp;
+      existingUser.otp = hashOtp(otp);
       existingUser.otpExpires = otpExpires;
       await existingUser.save();
     } else {
@@ -159,7 +171,7 @@ router.post("/register", authLimiter, async (req, res) => {
     }
 
     // Trigger email via Brevo HTTP API
-    sendOtpEmail(cleanEmail, firstName, otp, "🔐 Your Verification Code — UNI-TRACK");
+    await sendOtpEmail(cleanEmail, firstName, otp, "🔐 Your Verification Code — UNI-TRACK");
 
     return res.status(200).json({
       message: "Registration successful! Please check your email for the verification code.",
@@ -202,7 +214,7 @@ router.post("/verify-otp", otpLimiter, async (req, res) => {
       return res.status(400).json({ message: "OTP code has expired. Please request a new one." });
     }
 
-    if (user.otp !== cleanOtp) {
+    if (!otpMatches(user.otp, cleanOtp)) {
       return res.status(400).json({ message: "Invalid verification code." });
     }
 
@@ -333,12 +345,12 @@ router.post("/forgot-password", otpLimiter, async (req, res) => {
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
 
-    user.otp = otp;
+    user.otp = hashOtp(otp);
     user.otpExpires = otpExpires;
     await user.save();
 
     // Trigger email via Brevo HTTP API
-    sendOtpEmail(cleanEmail, user.firstName, otp, "🔒 Password Reset Code — UNI-TRACK");
+    await sendOtpEmail(cleanEmail, user.firstName, otp, "🔒 Password Reset Code — UNI-TRACK");
 
     return res.status(200).json({ message: "Password reset code sent to your email." });
   } catch (err) {
