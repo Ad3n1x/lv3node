@@ -95,7 +95,7 @@ router.post("/", verifyToken, async (req, res) => {
 
     const tracker = new Tracker({
       userId,
-      name: name.trim(),
+      name: typeof name === "string" ? name.trim() : name,
       type,
       icon,
       color,
@@ -177,7 +177,7 @@ router.put("/:id", verifyToken, async (req, res) => {
     const body = req.body || {};
 
     const changedFields = ["name", "type", "icon", "color", "target", "unit"].filter((key) => body[key] !== undefined);
-    if (body.name !== undefined) tracker.name = String(body.name).trim();
+    if (body.name !== undefined) tracker.name = typeof body.name === "string" ? body.name.trim() : body.name;
     if (body.type !== undefined) tracker.type = body.type;
     if (body.icon !== undefined) tracker.icon = body.icon;
     if (body.color !== undefined) tracker.color = body.color;
