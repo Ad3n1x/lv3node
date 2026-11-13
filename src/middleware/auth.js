@@ -1,8 +1,8 @@
 const jwt = require("jsonwebtoken");
 const Session = require("../models/Session");
 
-// Every newly issued UNI-TRACK token carries a revocable session identifier.
-// Legacy tokens without jti remain accepted only until their existing expiry.
+// Every accepted UNI-TRACK token must map to a revocable device session.
+// Pre-session legacy tokens are rejected so they cannot bypass device revocation.
 const verifyToken = async (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
@@ -15,7 +15,10 @@ const verifyToken = async (req, res, next) => {
 
   try {
     const decoded = jwt.verify(authHeader.slice(7), process.env.JWT_SECRET);
-    if (decoded.jti) {
+    if (!decoded.jti) {
+      return res.status(401).json({ message: "Your sign-in session needs refreshing. Please sign in again." });
+    }
+    {
       const session = await Session.findOne({
         userId: decoded.id,
         jti: decoded.jti,
