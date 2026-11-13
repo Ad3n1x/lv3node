@@ -8,6 +8,7 @@ const User = require("../models/User");
 const Session = require("../models/Session");
 const Tracker = require("../models/Tracker");
 const PushSubscription = require("../models/PushSubscription");
+const { generateOtp, hashOtp, otpMatches, escapeHtml } = require("../utils/security");
 
 // FIXED: Destructured verifyToken to ensure it resolves to a function, not an object
 const middleware = require("../middleware/auth");
@@ -29,28 +30,6 @@ const createUserSession = async (user, req) => {
   return jwt.sign({ id: user._id, email: user.email, jti }, process.env.JWT_SECRET, { expiresIn: "7d" });
 };
 
-const generateOtp = () => crypto.randomInt(100000, 1000000).toString();
-const hashOtp = (value) => {
-  const pepper = process.env.OTP_HASH_SECRET || process.env.JWT_SECRET;
-  if (!pepper) throw new Error("OTP_HASH_SECRET or JWT_SECRET must be configured.");
-  return crypto.createHmac("sha256", pepper).update(String(value)).digest("hex");
-};
-const otpMatches = (stored, candidate) => {
-  if (typeof stored !== "string") return false;
-  const candidateHash = hashOtp(candidate);
-  if (stored.length === candidateHash.length) {
-    return crypto.timingSafeEqual(Buffer.from(stored), Buffer.from(candidateHash));
-  }
-  // Temporary compatibility for unexpired OTPs issued before this deployment.
-  return stored === String(candidate);
-};
-const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({
-  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
-}[char]));
-
-// ==========================================
-// BREVO HTTP API CLIENT INITIALIZATION
-// ==========================================
 const brevo = new BrevoClient({
   apiKey: process.env.BREVO_API_KEY,
 });
