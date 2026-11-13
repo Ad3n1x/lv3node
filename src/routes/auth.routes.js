@@ -165,7 +165,7 @@ router.post("/register", authLimiter, async (req, res) => {
         email: cleanEmail,
         password: hashedPassword,
         isVerified: false,
-        otp,
+        otp: hashOtp(otp),
         otpExpires,
       });
     }
@@ -342,7 +342,7 @@ router.post("/forgot-password", otpLimiter, async (req, res) => {
       return res.status(200).json({ message: "If an account exists, a reset code has been sent." });
     }
 
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otp = generateOtp();
     const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
 
     user.otp = hashOtp(otp);
@@ -388,7 +388,7 @@ router.post("/reset-password", authLimiter, async (req, res) => {
       return res.status(400).json({ message: "Reset code has expired." });
     }
 
-    if (user.otp !== cleanOtp) {
+    if (!otpMatches(user.otp, cleanOtp)) {
       return res.status(400).json({ message: "Invalid reset code." });
     }
 
