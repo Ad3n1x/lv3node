@@ -469,13 +469,15 @@ const sendDailyNotifications = async () => {
     });
 
     for (const sub of subs) {
-      await webpush.sendNotification(sub.subscription, payload).catch((err) => {
+      try {
+        await webpush.sendNotification(sub.subscription, payload);
+      } catch (err) {
         if (err.statusCode === 404 || err.statusCode === 410) {
           await PushSubscription.deleteOne({ _id: sub._id });
         } else {
           console.error("Error sending push notification:", err.message);
         }
-      });
+      }
     }
     console.log(`✅ Push notifications sent to ${subs.length} subscribers.`);
   } catch (error) {
