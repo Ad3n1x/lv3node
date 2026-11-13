@@ -203,7 +203,7 @@ app.get(["/api/v1/user/status", "/api/user/status"], verifyToken, async (req, re
 });
 
 // Web Push Notification Subscription Endpoint
-app.post("/api/v1/subscribe", verifyToken, async (req, res) => {
+app.post("/api/v1/subscribe", verifyToken, requirePremium, async (req, res) => {
   try {
     const subscription = req.body;
     if (!subscription || !subscription.endpoint) {
@@ -461,7 +461,7 @@ cron.schedule("0 0 * * *", async () => {
 // Push Notification Reminder Function
 const sendDailyNotifications = async () => {
   try {
-    const subs = await PushSubscription.find().populate("userId");
+    const subs = (await PushSubscription.find().populate("userId")).filter((sub) => sub.userId && sub.userId.isPremium);
 
     const payload = JSON.stringify({
       title: "Universal Tracker Reminder 🔔",
@@ -469,13 +469,15 @@ const sendDailyNotifications = async () => {
     });
 
     for (const sub of subs) {
-      await webpush.sendNotification(sub.subscription, payload).catch((err) => {
+      try {
+        await webpush.sendNotification(sub.subscription, payload);
+      } catch (err) {
         if (err.statusCode === 404 || err.statusCode === 410) {
-          PushSubscription.deleteOne({ _id: sub._id }).exec();
+          await PushSubscription.deleteOne({ _id: sub._id });
         } else {
           console.error("Error sending push notification:", err.message);
         }
-      });
+      }
     }
     console.log(`✅ Push notifications sent to ${subs.length} subscribers.`);
   } catch (error) {
@@ -490,13 +492,22 @@ cron.schedule("0 20 * * *", sendDailyNotifications, {
 
 // Manual Trigger Endpoint for External Cron Jobs
 app.post("/api/v1/trigger-daily-push", async (req, res) => {
-  const secret = req.headers['x-cron-secret'];
-  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+  const configuredSecret = process.env.CRON_SECRET;
+  const suppliedSecret = req.headers["x-cron-secret"];
+
+  // Fail closed: a missing secret must never turn this endpoint public.
+  if (!configuredSecret || typeof suppliedSecret !== "string") {
+    return res.status(503).json({ error: "Scheduled trigger is not configured." });
+  }
+
+  const expected = Buffer.from(configuredSecret);
+  const received = Buffer.from(suppliedSecret);
+  if (expected.length !== received.length || !crypto.timingSafeEqual(expected, received)) {
     return res.status(401).json({ error: "Unauthorized" });
   }
-  
+
   await sendDailyNotifications();
-  res.status(200).json({ message: "Daily push notifications triggered manually." });
+  return res.status(200).json({ message: "Daily push notifications triggered manually." });
 });
 
 // 404 Handler for Unmatched Routes
