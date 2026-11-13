@@ -16,7 +16,7 @@ const trackerSchema = new mongoose.Schema({
   unit: { type: String, maxlength: 40 },
   entries: { type: mongoose.Schema.Types.Mixed, default: [] },
   archivedAt: { type: Date, default: null, index: true },
-  deletedAt: { type: Date, default: null, index: true },
+  deletedAt: { type: Date, default: null, index: { expireAfterSeconds: 60 * 60 * 24 * 30 } },
   activity: { type: [activitySchema], default: [] },
 }, { timestamps: true });
 
