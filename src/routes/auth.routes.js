@@ -13,7 +13,11 @@ const verifyToken = typeof middleware === "function" ? middleware : middleware.v
 const router = express.Router();
 
 const generateOtp = () => crypto.randomInt(100000, 1000000).toString();
-const hashOtp = (value) => crypto.createHash("sha256").update(String(value)).digest("hex");
+const hashOtp = (value) => {
+  const pepper = process.env.OTP_HASH_SECRET || process.env.JWT_SECRET;
+  if (!pepper) throw new Error("OTP_HASH_SECRET or JWT_SECRET must be configured.");
+  return crypto.createHmac("sha256", pepper).update(String(value)).digest("hex");
+};
 const otpMatches = (stored, candidate) => {
   if (typeof stored !== "string") return false;
   const candidateHash = hashOtp(candidate);
