@@ -102,6 +102,7 @@ router.post("/", verifyToken, async (req, res) => {
       target,
       unit,
       entries: entries !== undefined ? entries : [],
+      activity: [{ type: "created", label: "Tracker created", at: new Date() }],
     });
 
     const savedTracker = await tracker.save();
@@ -138,6 +139,7 @@ router.post("/:id/entries", verifyToken, async (req, res) => {
       tracker.entries = req.body;
     }
     tracker.markModified("entries");
+    appendActivity(tracker, "entry_added", "A tracking entry was added");
 
     const updatedTracker = await tracker.save();
     return res.status(200).json(formatTracker(updatedTracker));
@@ -183,6 +185,9 @@ router.put("/:id", verifyToken, async (req, res) => {
     }
 
     tracker.markModified("entries");
+    if (changedFields.length || body.entries !== undefined || body.entry !== undefined || body.newEntry !== undefined) {
+      appendActivity(tracker, "updated", "Tracker details or progress updated");
+    }
 
     const updatedTracker = await tracker.save();
     return res.status(200).json(formatTracker(updatedTracker));
