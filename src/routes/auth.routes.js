@@ -6,6 +6,8 @@ const rateLimit = require("express-rate-limit");
 const { BrevoClient } = require("@getbrevo/brevo");
 const User = require("../models/User");
 const Session = require("../models/Session");
+const Tracker = require("../models/Tracker");
+const PushSubscription = require("../models/PushSubscription");
 
 // FIXED: Destructured verifyToken to ensure it resolves to a function, not an object
 const middleware = require("../middleware/auth");
@@ -415,6 +417,8 @@ router.post("/reset-password", authLimiter, async (req, res) => {
     user.otp = undefined;
     user.otpExpires = undefined;
     await user.save();
+    // Password recovery invalidates all previously issued device sessions.
+    await Session.updateMany({ userId: user._id, revokedAt: null }, { $set: { revokedAt: new Date() } });
 
     return res.status(200).json({ message: "Password reset successful! Please log in with your new password." });
   } catch (err) {
@@ -471,6 +475,31 @@ router.delete("/sessions/:sessionId", verifyToken, async (req, res) => {
     return res.json({ message: "Session revoked." });
   } catch {
     return res.status(500).json({ message: "Could not revoke session." });
+  }
+});
+
+router.delete("/account", verifyToken, async (req, res) => {
+  try {
+    const { password, confirmation } = req.body || {};
+    if (confirmation !== "DELETE" || typeof password !== "string" || !password) {
+      return res.status(400).json({ message: "Enter your password and type DELETE to confirm account removal." });
+    }
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ message: "Account not found." });
+    const matches = await bcrypt.compare(password, user.password);
+    if (!matches) return res.status(401).json({ message: "Password confirmation failed." });
+
+    // Remove dependent records first; no tracker contents are copied into logs.
+    await Promise.all([
+      Tracker.deleteMany({ userId: user._id }),
+      Session.deleteMany({ userId: user._id }),
+      PushSubscription.deleteMany({ userId: user._id }),
+    ]);
+    await User.deleteOne({ _id: user._id });
+    return res.status(200).json({ message: "Your account and associated tracker data have been deleted." });
+  } catch (err) {
+    console.error("Account deletion error:", err);
+    return res.status(500).json({ message: "Account deletion could not be completed." });
   }
 });
 
