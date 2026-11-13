@@ -5,7 +5,8 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "nodemon src/server.js"
+    "dev": "nodemon src/server.js",
+    "test": "node --test src/utils/*.test.js"
   },
   "dependencies": {
     "@getbrevo/brevo": "^6.0.3",
