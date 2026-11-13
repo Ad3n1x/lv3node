@@ -124,7 +124,7 @@ router.post("/:id/entries", verifyToken, async (req, res) => {
       return res.status(400).json({ message: "Invalid tracker ID format." });
     }
 
-    const tracker = await Tracker.findOne({ _id: id, userId });
+    const tracker = await Tracker.findOne({ _id: id, userId, archivedAt: null, deletedAt: null });
     if (!tracker) {
       return res.status(404).json({ message: "Tracker not found or unauthorized." });
     }
