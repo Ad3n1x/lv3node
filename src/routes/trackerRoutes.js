@@ -246,10 +246,11 @@ router.post("/:id/restore", verifyToken, async (req, res) => {
     const { id } = req.params;
     if (!userId) return res.status(401).json({ message: "Unauthorized." });
     if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ message: "Invalid tracker ID." });
-    const tracker = await Tracker.findOne({ _id: id, userId, deletedAt: { $ne: null } }).or([
-      { archivedAt: { $ne: null }, deletedAt: null },
-      { deletedAt: { $ne: null } },
-    ]);
+    const tracker = await Tracker.findOne({
+      _id: id,
+      userId,
+      $or: [{ archivedAt: { $ne: null }, deletedAt: null }, { deletedAt: { $ne: null } }],
+    });
     if (!tracker) return res.status(404).json({ message: "Restorable tracker not found." });
     tracker.deletedAt = null;
     tracker.archivedAt = null;
