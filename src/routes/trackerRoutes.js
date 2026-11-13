@@ -165,6 +165,15 @@ router.put("/:id", verifyToken, async (req, res) => {
       return res.status(404).json({ message: "Tracker not found or unauthorized." });
     }
 
+    const expectedVersion = req.get("if-match");
+    if (expectedVersion && Number(expectedVersion) !== new Date(tracker.updatedAt).getTime()) {
+      return res.status(409).json({
+        code: "TRACKER_VERSION_CONFLICT",
+        message: "This tracker changed on another device. Refresh before applying your update.",
+        currentVersion: tracker.updatedAt,
+      });
+    }
+
     const body = req.body || {};
 
     const changedFields = ["name", "type", "icon", "color", "target", "unit"].filter((key) => body[key] !== undefined);
