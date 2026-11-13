@@ -167,7 +167,8 @@ router.put("/:id", verifyToken, async (req, res) => {
 
     const body = req.body || {};
 
-    const changedFields = ["name", "type", "icon", "color", "target", "unit"].filter((key) => body[key] !== undefined);\n    if (body.name !== undefined) tracker.name = String(body.name).trim();
+    const changedFields = ["name", "type", "icon", "color", "target", "unit"].filter((key) => body[key] !== undefined);
+    if (body.name !== undefined) tracker.name = String(body.name).trim();
     if (body.type !== undefined) tracker.type = body.type;
     if (body.icon !== undefined) tracker.icon = body.icon;
     if (body.color !== undefined) tracker.color = body.color;
