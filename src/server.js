@@ -116,7 +116,7 @@ app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 
 // Global Request Logger
 app.use((req, res, next) => {
-  console.log(`📥 INCOMING REQUEST: ${req.method} ${req.originalUrl} from ${req.headers.origin || "unknown origin"}`);
+  console.log(`📥 INCOMING REQUEST: ${req.method} ${req.path} from ${req.headers.origin || "unknown origin"}`);
   next();
 });
 
@@ -490,13 +490,14 @@ cron.schedule("0 20 * * *", sendDailyNotifications, {
 
 // Manual Trigger Endpoint for External Cron Jobs
 app.post("/api/v1/trigger-daily-push", async (req, res) => {
-  const secret = req.headers['x-cron-secret'];
-  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-  
+  const configuredSecret = process.env.CRON_SECRET;
+  const suppliedSecret = req.headers["x-cron-secret"];
+  if (!configuredSecret) return res.status(503).json({ error: "Scheduled trigger is not configured." });
+  const expected = Buffer.from(configuredSecret);
+  const received = Buffer.from(typeof suppliedSecret === "string" ? suppliedSecret : "");
+  if (expected.length !== received.length || !crypto.timingSafeEqual(expected, received)) return res.status(401).json({ error: "Unauthorized" });
   await sendDailyNotifications();
-  res.status(200).json({ message: "Daily push notifications triggered manually." });
+  return res.status(200).json({ message: "Daily push notifications triggered." });
 });
 
 // 404 Handler for Unmatched Routes

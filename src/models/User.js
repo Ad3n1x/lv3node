@@ -48,8 +48,11 @@ const userSchema = new mongoose.Schema(
     email: { type: String, required: true, unique: true, lowercase: true, trim: true }, // Clear for querying/login
     password: { type: String, required: true },  // Hashed via bcrypt
     isVerified: { type: Boolean, default: false },
-    otp: { type: String },
-    otpExpires: { type: Date },
+    otp: { type: String, select: false }, // Legacy field; new codes are never stored in plaintext.
+    otpHash: { type: String, select: false },
+    otpPurpose: { type: String, enum: ["verify", "reset"], select: false },
+    otpAttempts: { type: Number, default: 0, select: false },
+    otpExpires: { type: Date, select: false },
     publicKey: { type: String },
     
     // Subscription & Expiration Tracking

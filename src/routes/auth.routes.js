@@ -4,412 +4,196 @@ const jwt = require("jsonwebtoken");
 const rateLimit = require("express-rate-limit");
 const { BrevoClient } = require("@getbrevo/brevo");
 const User = require("../models/User");
+const { createOtp, hashOtp, verifyOtpHash, escapeHtml } = require("../utils/otp");
 
-// FIXED: Destructured verifyToken to ensure it resolves to a function, not an object
 const middleware = require("../middleware/auth");
 const verifyToken = typeof middleware === "function" ? middleware : middleware.verifyToken;
-
 const router = express.Router();
+const brevo = process.env.BREVO_API_KEY ? new BrevoClient({ apiKey: process.env.BREVO_API_KEY }) : null;
 
-// ==========================================
-// BREVO HTTP API CLIENT INITIALIZATION
-// ==========================================
-const brevo = new BrevoClient({
-  apiKey: process.env.BREVO_API_KEY,
-});
+const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: true, legacyHeaders: false, message: { message: "Too many attempts. Please wait 15 minutes and try again." } });
+const otpLimiter = rateLimit({ windowMs: 10 * 60 * 1000, limit: 5, standardHeaders: true, legacyHeaders: false, message: { message: "Too many code attempts. Please wait before trying again." } });
 
-// ==========================================
-// SECURITY RATE LIMITERS (Brute-Force Protection)
-// ==========================================
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10, // Limit each IP to 10 requests per window
-  message: { message: "Too many attempts from this IP, please try again after 15 minutes." },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
+const cleanEmail = (value) => String(value || "").trim().toLowerCase();
+const validEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+const validatePassword = (value) => typeof value === "string" && value.length >= 8 &&
+  /[a-z]/.test(value) && /[A-Z]/.test(value) && /\d/.test(value) && /[@$!%*?&]/.test(value);
+const getOtpSecret = () => process.env.OTP_HASH_SECRET || process.env.JWT_SECRET;
 
-const otpLimiter = rateLimit({
-  windowMs: 10 * 60 * 1000, // 10 minutes
-  max: 5, // Limit each IP to 5 OTP requests
-  message: { message: "Too many OTP requests. Please wait a few minutes before trying again." },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-// ==========================================
-// HELPER: RETRY LOGIC FOR EMAIL DELIVERY (BREVO HTTP API)
-// ==========================================
-const sendBrevoMailWithRetry = async (emailParams, retries = 3, delay = 2000) => {
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    try {
-      const response = await brevo.transactionalEmails.sendTransacEmail(emailParams);
-      console.log(`✅ [Email Sent via Brevo] MessageId: ${response.messageId} (Attempt ${attempt})`);
-      return response;
-    } catch (err) {
-      console.warn(`⚠️ [Email Attempt ${attempt}/${retries} Failed]: ${err.message || err}`);
-      if (attempt === retries) throw err;
-      await new Promise((resolve) => setTimeout(resolve, delay * attempt));
-    }
+async function sendOtpEmail(toEmail, firstName, otp, subject) {
+  if (!brevo || !process.env.SENDER_EMAIL) {
+    const error = new Error("Email delivery is not configured.");
+    error.statusCode = 503;
+    throw error;
   }
-};
-
-// ==========================================
-// HELPER: BACKGROUND OTP MAILER VIA BREVO API
-// ==========================================
-const sendOtpEmail = async (toEmail, firstName, otp, subjectTitle) => {
-  if (!process.env.BREVO_API_KEY || !process.env.SENDER_EMAIL) {
-    console.warn("⚠️ [Config Warning] BREVO_API_KEY or SENDER_EMAIL missing in environment.");
-    console.log(`🔑 [DEV MODE OTP] Destination: ${toEmail} | Code: ${otp}`);
-    return;
-  }
-
   const emailParams = {
-    subject: subjectTitle,
-    sender: {
-      name: process.env.SENDER_NAME || "UNI-TRACK Security",
-      email: process.env.SENDER_EMAIL,
-    },
+    subject,
+    sender: { name: process.env.SENDER_NAME || "UNI-TRACK Security", email: process.env.SENDER_EMAIL },
     to: [{ email: toEmail, name: firstName }],
-    htmlContent: `
-      <div style="background-color: #f8f9fa; padding: 40px 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;">
-        <div style="max-width: 480px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.05); border: 1px solid #e9ecef;">
-          <div style="background: linear-gradient(135deg, #0d6efd 0%, #0a58ca 100%); padding: 30px; text-align: center; color: #ffffff;">
-            <h1 style="margin: 0; font-size: 24px; font-weight: 700; letter-spacing: 0.5px;">UNI-TRACK</h1>
-            <p style="margin: 8px 0 0 0; font-size: 14px; opacity: 0.9;">Secure Account Verification</p>
-          </div>
-          <div style="padding: 35px 30px; text-align: left; color: #495057;">
-            <p style="margin-top: 0; font-size: 16px; font-weight: 500;">Hello <strong>${firstName}</strong>,</p>
-            <p style="font-size: 15px; line-height: 1.5; color: #6c757d;">
-              Use the secure verification code below to complete your action. This code expires in <strong>10 minutes</strong>.
-            </p>
-            <div style="margin: 30px 0; text-align: center;">
-              <div style="display: inline-block; background-color: #f1f3f5; border: 2px dashed #ced4da; border-radius: 8px; padding: 15px 30px; font-size: 32px; font-weight: 800; letter-spacing: 6px; color: #0d6efd;">
-                ${otp}
-              </div>
-            </div>
-            <p style="font-size: 13px; color: #adb5bd; line-height: 1.4; margin-bottom: 0;">
-              If you did not request this verification code, please ignore this email.
-            </p>
-          </div>
-          <div style="background-color: #f8f9fa; padding: 15px 30px; text-align: center; font-size: 12px; color: #adb5bd; border-top: 1px solid #e9ecef;">
-            &copy; ${new Date().getFullYear()} UNI-TRACK. All rights reserved.
-          </div>
-        </div>
-      </div>
-    `,
+    htmlContent: `<div style="font-family:Arial,sans-serif;background:#f5f7fb;padding:32px 16px;color:#172033"><div style="max-width:480px;margin:auto;background:#fff;border:1px solid #e5eaf2;border-radius:16px;padding:32px"><h1 style="font-size:22px;margin:0 0 8px">UNI-TRACK</h1><p style="color:#64748b">Account security verification</p><p>Hello ${escapeHtml(firstName)},</p><p>Your verification code is below. It expires in 10 minutes.</p><div style="font-size:30px;font-weight:700;letter-spacing:8px;padding:18px;text-align:center;background:#f1f5f9;border-radius:10px">${otp}</div><p style="font-size:13px;color:#64748b">If you did not request this code, you can ignore this email.</p></div></div>`,
   };
+  let lastError;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try { return await brevo.transactionalEmails.sendTransacEmail(emailParams); }
+    catch (error) { lastError = error; if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, attempt * 1000)); }
+  }
+  throw lastError || new Error("Email delivery failed.");
+}
 
-  // Non-blocking asynchronous dispatch
-  sendBrevoMailWithRetry(emailParams).catch((err) => {
-    console.error(`❌ [Critical Email Failure] Failed to send OTP via Brevo to ${toEmail}:`, err.stack || err);
-  });
-};
+function issueOtpFields(email, purpose, otp) {
+  if (!getOtpSecret()) {
+    const error = new Error("OTP signing is not configured.");
+    error.statusCode = 503;
+    throw error;
+  }
+  return { otp: undefined, otpHash: hashOtp(email, purpose, otp, getOtpSecret()), otpPurpose: purpose, otpAttempts: 0, otpExpires: new Date(Date.now() + 10 * 60 * 1000) };
+}
 
-// ==========================================
-// 1. POST /api/v1/auth/register
-// ==========================================
+function clearOtpFields(user) {
+  user.otp = undefined; user.otpHash = undefined; user.otpPurpose = undefined;
+  user.otpAttempts = 0; user.otpExpires = undefined;
+}
+
+async function consumeOtp(user, email, purpose, suppliedOtp) {
+  if (!user.otpHash || user.otpPurpose !== purpose || !user.otpExpires ||
+      user.otpExpires.getTime() <= Date.now() || user.otpAttempts >= 5) return false;
+  if (!verifyOtpHash(email, purpose, suppliedOtp, user.otpHash, getOtpSecret())) {
+    user.otpAttempts = (user.otpAttempts || 0) + 1;
+    if (user.otpAttempts >= 5) clearOtpFields(user);
+    await user.save();
+    return false;
+  }
+  return true;
+}
+
 router.post("/register", authLimiter, async (req, res) => {
   try {
-    const rawFirstName = req.body.firstName || req.body.firstname;
-    const rawLastName = req.body.lastName || req.body.lastname;
-    const { email, password } = req.body;
-
-    if (!email || !password || !rawFirstName || !rawLastName) {
-      return res.status(400).json({ message: "All fields are required." });
-    }
-
-    const cleanEmail = String(email).trim().toLowerCase();
-    const cleanPassword = String(password).trim();
-    const firstName = String(rawFirstName).trim();
-    const lastName = String(rawLastName).trim();
-
-    if (cleanPassword.length < 6) {
-      return res.status(400).json({ message: "Password must be at least 6 characters long." });
-    }
-
-    let existingUser = await User.findOne({ email: cleanEmail });
-    if (existingUser && existingUser.isVerified) {
-      return res.status(400).json({
-        message: "User with this email already exists and is verified.",
-      });
-    }
-
-    const hashedPassword = await bcrypt.hash(cleanPassword, 10);
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 mins
-
-    if (existingUser && !existingUser.isVerified) {
-      existingUser.firstName = firstName;
-      existingUser.lastName = lastName;
-      existingUser.password = hashedPassword;
-      existingUser.otp = otp;
-      existingUser.otpExpires = otpExpires;
-      await existingUser.save();
+    const email = cleanEmail(req.body.email);
+    const firstName = String(req.body.firstName || req.body.firstname || "").trim();
+    const lastName = String(req.body.lastName || req.body.lastname || "").trim();
+    const password = req.body.password;
+    if (!validEmail(email) || !firstName || !lastName || !password) return res.status(400).json({ message: "Enter a valid email, first name, last name and password." });
+    if (firstName.length > 80 || lastName.length > 80 || email.length > 254) return res.status(400).json({ message: "One or more fields are too long." });
+    if (!validatePassword(password)) return res.status(400).json({ message: "Password must be at least 8 characters and include uppercase, lowercase, a number and a special character." });
+    const existingUser = await User.findOne({ email });
+    if (existingUser?.isVerified) return res.status(409).json({ message: "An account with this email already exists." });
+    const otp = createOtp();
+    const hashedPassword = await bcrypt.hash(password, 12);
+    const otpFields = issueOtpFields(email, "verify", otp);
+    let user = existingUser;
+    if (user) {
+      user.firstName = firstName; user.lastName = lastName; user.password = hashedPassword;
+      Object.assign(user, otpFields); await user.save();
     } else {
-      await User.create({
-        firstName,
-        lastName,
-        email: cleanEmail,
-        password: hashedPassword,
-        isVerified: false,
-        otp,
-        otpExpires,
-      });
+      user = await User.create({ firstName, lastName, email, password: hashedPassword, isVerified: false, ...otpFields });
     }
-
-    // Trigger email via Brevo HTTP API
-    sendOtpEmail(cleanEmail, firstName, otp, "🔐 Your Verification Code — UNI-TRACK");
-
-    return res.status(200).json({
-      message: "Registration successful! Please check your email for the verification code.",
-    });
-  } catch (err) {
-    console.error("❌ Registration Endpoint Error:", err);
-    return res.status(500).json({ message: "Internal server error during registration." });
+    try { await sendOtpEmail(email, firstName, otp, "Your UNI-TRACK verification code"); }
+    catch (mailError) {
+      clearOtpFields(user); await user.save();
+      console.error("Registration email delivery failed:", mailError.message);
+      return res.status(mailError.statusCode || 503).json({ message: "We could not send the verification email. Please try again shortly." });
+    }
+    return res.status(200).json({ status: "success", message: "Verification code sent. It expires in 10 minutes." });
+  } catch (error) {
+    console.error("Registration failed:", error.message);
+    return res.status(error.statusCode || 500).json({ message: "Registration could not be completed." });
   }
 });
 
-// ==========================================
-// 2. POST /api/v1/auth/verify-otp
-// ==========================================
 router.post("/verify-otp", otpLimiter, async (req, res) => {
   try {
-    const { email, otp } = req.body;
-
-    if (!email || !otp) {
-      return res.status(400).json({ message: "Email and OTP are required." });
-    }
-
-    const cleanEmail = String(email).trim().toLowerCase();
-    const cleanOtp = String(otp).trim();
-
-    const user = await User.findOne({ email: cleanEmail });
-
-    if (!user) {
-      return res.status(404).json({ message: "Account not found." });
-    }
-
-    if (user.isVerified) {
-      return res.status(400).json({ message: "Account is already verified." });
-    }
-
-    if (!user.otp || !user.otpExpires) {
-      return res.status(400).json({ message: "No active verification request found. Please request a new code." });
-    }
-
-    if (user.otpExpires.getTime() < Date.now()) {
-      return res.status(400).json({ message: "OTP code has expired. Please request a new one." });
-    }
-
-    if (user.otp !== cleanOtp) {
-      return res.status(400).json({ message: "Invalid verification code." });
-    }
-
-    // Mark user verified & invalidate OTP
-    user.isVerified = true;
-    user.otp = undefined;
-    user.otpExpires = undefined;
-    await user.save();
-
-    if (!process.env.JWT_SECRET) {
-      return res.status(503).json({ message: "Authentication is temporarily unavailable." });
-    }
-    const secret = process.env.JWT_SECRET;
-    const token = jwt.sign(
-      { id: user._id, email: user.email },
-      secret,
-      { expiresIn: "7d" }
-    );
-
-    return res.status(200).json({
-      token,
-      message: "Account verified successfully!",
-      user: {
-        id: user._id,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        email: user.email,
-      },
-    });
-  } catch (err) {
-    console.error("❌ Verify OTP Endpoint Error:", err);
-    return res.status(500).json({ message: "Internal server error during verification." });
+    const email = cleanEmail(req.body.email);
+    const otp = String(req.body.otp || "").trim();
+    if (!validEmail(email) || !/^\d{6}$/.test(otp)) return res.status(400).json({ message: "Enter a valid email and six-digit code." });
+    const user = await User.findOne({ email }).select("+otpHash +otpPurpose +otpAttempts +otpExpires +otp");
+    if (!user) return res.status(400).json({ message: "Invalid or expired verification code." });
+    if (user.isVerified) return res.status(409).json({ message: "This account is already verified." });
+    if (!(await consumeOtp(user, email, "verify", otp))) return res.status(400).json({ message: "Invalid or expired verification code." });
+    user.isVerified = true; clearOtpFields(user); await user.save();
+    if (!process.env.JWT_SECRET) return res.status(503).json({ message: "Authentication is temporarily unavailable." });
+    const token = jwt.sign({ id: user._id, userId: user._id, email: user.email }, process.env.JWT_SECRET, { expiresIn: "7d", issuer: "unitrack-api", audience: "unitrack-app" });
+    return res.status(200).json({ status: "success", token, message: "Email verified successfully!", user: { id: user._id, firstName: user.firstName, lastName: user.lastName, email: user.email } });
+  } catch (error) {
+    console.error("OTP verification failed:", error.message);
+    return res.status(500).json({ message: "Verification could not be completed." });
   }
 });
 
-// ==========================================
-// 3. POST /api/v1/auth/login
-// ==========================================
 router.post("/login", authLimiter, async (req, res) => {
   try {
-    const { email, password } = req.body;
-
-    if (!email || !password) {
-      return res.status(400).json({ message: "Email and password are required." });
-    }
-
-    const cleanEmail = String(email).trim().toLowerCase();
-    const cleanPassword = String(password).trim();
-
-    const user = await User.findOne({ email: cleanEmail });
-    if (!user) {
-      return res.status(401).json({ message: "Invalid credentials." });
-    }
-
-    if (!user.isVerified) {
-      return res.status(403).json({
-        message: "Account not verified. Please verify your account using the OTP sent to your email.",
-      });
-    }
-
-    const isMatch = await bcrypt.compare(cleanPassword, user.password);
-    if (!isMatch) {
-      return res.status(401).json({ message: "Invalid credentials." });
-    }
-
-    if (!process.env.JWT_SECRET) {
-      return res.status(503).json({ message: "Authentication is temporarily unavailable." });
-    }
-    const secret = process.env.JWT_SECRET;
-    const token = jwt.sign(
-      { id: user._id, email: user.email },
-      secret,
-      { expiresIn: "7d" }
-    );
-
-    return res.status(200).json({
-      token,
-      message: "Login successful!",
-      user: {
-        id: user._id,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        email: user.email,
-      },
-    });
-  } catch (err) {
-    console.error("❌ Login Endpoint Error:", err);
-    return res.status(500).json({ message: "Internal server error during login." });
+    const email = cleanEmail(req.body.email);
+    const password = req.body.password;
+    if (!validEmail(email) || typeof password !== "string" || !password) return res.status(400).json({ message: "Email and password are required." });
+    if (!process.env.JWT_SECRET) return res.status(503).json({ message: "Authentication is temporarily unavailable." });
+    const user = await User.findOne({ email });
+    if (!user || !user.isVerified || !(await bcrypt.compare(password, user.password))) return res.status(401).json({ message: "Invalid email or password, or account not verified." });
+    const token = jwt.sign({ id: user._id, userId: user._id, email: user.email }, process.env.JWT_SECRET, { expiresIn: "7d", issuer: "unitrack-api", audience: "unitrack-app" });
+    return res.status(200).json({ status: "success", token, message: "Login successful!", user: { id: user._id, firstName: user.firstName, lastName: user.lastName, email: user.email } });
+  } catch (error) {
+    console.error("Login failed:", error.message);
+    return res.status(500).json({ message: "Login could not be completed." });
   }
 });
 
-// ==========================================
-// 4. POST /api/v1/auth/public-key
-// ==========================================
 router.post("/public-key", verifyToken, async (req, res) => {
   try {
-    const { publicKey } = req.body;
-    if (!publicKey) {
-      return res.status(400).json({ message: "Public key is required." });
-    }
-
-    await User.findByIdAndUpdate(req.user.id, { publicKey: String(publicKey).trim() });
+    const publicKey = String(req.body.publicKey || "").trim();
+    if (!publicKey || publicKey.length > 12000) return res.status(400).json({ message: "A valid public key is required." });
+    await User.findByIdAndUpdate(req.user.id, { publicKey });
     return res.status(200).json({ message: "Public key saved successfully." });
-  } catch (err) {
-    console.error("❌ Public Key Endpoint Error:", err);
-    return res.status(500).json({ message: "Failed to store public key." });
+  } catch (error) {
+    console.error("Public-key update failed:", error.message);
+    return res.status(500).json({ message: "Could not save the public key." });
   }
 });
 
-// ==========================================
-// 5. POST /api/v1/auth/forgot-password
-// ==========================================
 router.post("/forgot-password", otpLimiter, async (req, res) => {
   try {
-    const { email } = req.body;
-    if (!email) {
-      return res.status(400).json({ message: "Email is required." });
+    const email = cleanEmail(req.body.email);
+    if (!validEmail(email)) return res.status(400).json({ message: "Enter a valid email address." });
+    const user = await User.findOne({ email });
+    const genericMessage = "If an account exists, a password reset code has been sent.";
+    if (!user) return res.status(200).json({ message: genericMessage });
+    const otp = createOtp();
+    Object.assign(user, issueOtpFields(email, "reset", otp)); await user.save();
+    try { await sendOtpEmail(email, user.firstName, otp, "Your UNI-TRACK password reset code"); }
+    catch (mailError) {
+      clearOtpFields(user); await user.save();
+      console.error("Password-reset email delivery failed:", mailError.message);
+      return res.status(503).json({ message: "We could not send the reset email. Please try again shortly." });
     }
-
-    const cleanEmail = String(email).trim().toLowerCase();
-    const user = await User.findOne({ email: cleanEmail });
-
-    if (!user) {
-      // Generic message to prevent email enumeration attacks
-      return res.status(200).json({ message: "If an account exists, a reset code has been sent." });
-    }
-
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
-
-    user.otp = otp;
-    user.otpExpires = otpExpires;
-    await user.save();
-
-    // Trigger email via Brevo HTTP API
-    sendOtpEmail(cleanEmail, user.firstName, otp, "🔒 Password Reset Code — UNI-TRACK");
-
-    return res.status(200).json({ message: "Password reset code sent to your email." });
-  } catch (err) {
-    console.error("❌ Forgot Password Endpoint Error:", err);
-    return res.status(500).json({ message: "Failed to process request." });
+    return res.status(200).json({ message: genericMessage });
+  } catch (error) {
+    console.error("Password-reset request failed:", error.message);
+    return res.status(error.statusCode || 500).json({ message: "Could not process the password-reset request." });
   }
 });
 
-// ==========================================
-// 6. POST /api/v1/auth/reset-password
-// ==========================================
-router.post("/reset-password", authLimiter, async (req, res) => {
+router.post("/reset-password", otpLimiter, async (req, res) => {
   try {
-    const { email, otp, newPassword } = req.body;
-
-    if (!email || !otp || !newPassword) {
-      return res.status(400).json({ message: "Email, OTP, and new password are required." });
-    }
-
-    const cleanEmail = String(email).trim().toLowerCase();
-    const cleanOtp = String(otp).trim();
-    const cleanPassword = String(newPassword).trim();
-
-    if (cleanPassword.length < 6) {
-      return res.status(400).json({ message: "Password must be at least 6 characters long." });
-    }
-
-    const user = await User.findOne({ email: cleanEmail });
-
-    if (!user || !user.otp || !user.otpExpires) {
-      return res.status(400).json({ message: "Invalid or expired reset code." });
-    }
-
-    if (user.otpExpires.getTime() < Date.now()) {
-      return res.status(400).json({ message: "Reset code has expired." });
-    }
-
-    if (user.otp !== cleanOtp) {
-      return res.status(400).json({ message: "Invalid reset code." });
-    }
-
-    user.password = await bcrypt.hash(cleanPassword, 10);
-    user.otp = undefined;
-    user.otpExpires = undefined;
-    await user.save();
-
-    return res.status(200).json({ message: "Password reset successful! Please log in with your new password." });
-  } catch (err) {
-    console.error("❌ Reset Password Endpoint Error:", err);
-    return res.status(500).json({ message: "Password reset failed." });
+    const email = cleanEmail(req.body.email);
+    const otp = String(req.body.otp || "").trim();
+    const password = req.body.newPassword;
+    if (!validEmail(email) || !/^\d{6}$/.test(otp) || typeof password !== "string") return res.status(400).json({ message: "Email, six-digit code and new password are required." });
+    if (!validatePassword(password)) return res.status(400).json({ message: "Password must be at least 8 characters and include uppercase, lowercase, a number and a special character." });
+    const user = await User.findOne({ email }).select("+otpHash +otpPurpose +otpAttempts +otpExpires +otp");
+    if (!user || !(await consumeOtp(user, email, "reset", otp))) return res.status(400).json({ message: "Invalid or expired reset code." });
+    user.password = await bcrypt.hash(password, 12); clearOtpFields(user); await user.save();
+    return res.status(200).json({ message: "Password reset successfully. Please sign in again." });
+  } catch (error) {
+    console.error("Password reset failed:", error.message);
+    return res.status(500).json({ message: "Password reset could not be completed." });
   }
 });
 
-// ==========================================
-// 7. GET /api/v1/auth/me
-// ==========================================
 router.get("/me", verifyToken, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).select("-password");
-    if (!user) {
-      return res.status(404).json({ error: "User not found." });
-    }
-    res.json({
-      id: user._id,
-      email: user.email,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      isPro: user.isPro,
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    const user = await User.findById(req.user.id).select("-password -otp -otpHash -otpExpires -otpPurpose -otpAttempts");
+    if (!user) return res.status(404).json({ message: "User not found." });
+    return res.status(200).json({ id: user._id, email: user.email, firstName: user.firstName, lastName: user.lastName, isPro: user.isPremium });
+  } catch (error) {
+    console.error("Profile lookup failed:", error.message);
+    return res.status(500).json({ message: "Could not load account details." });
   }
 });
 

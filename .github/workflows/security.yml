@@ -1,4 +1,4 @@
-name: Backend security checks
+name: Backend security and quality checks
 
 on:
   push:
@@ -6,16 +6,14 @@ on:
   pull_request:
     branches: [main]
   schedule:
-    - cron: "23 7 * * 1"
+    - cron: "19 8 * * 1"
   workflow_dispatch:
 
-# Re-check the current dependency graph after the compatible patch refresh.
-# Keep dependency and application checks independent so one failure never masks the other.
 permissions:
   contents: read
 
 jobs:
-  dependency-audit:
+  checks:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,18 +22,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Dependency audit (known vulnerabilities must be reviewed)
-        run: npm audit --audit-level=high
-
-  syntax-check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      - name: Check backend JavaScript syntax
+      - name: Syntax checks
         run: |
-          find src -type f -name '*.js' -print0 | xargs -0 -n1 node --check
+          find src test -type f -name '*.js' -print0 | xargs -0 -n1 node --check
+      - name: Unit tests
+        run: npm test
+      - name: Dependency audit
+        run: npm audit --audit-level=high
