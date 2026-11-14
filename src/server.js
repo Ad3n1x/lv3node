@@ -7,6 +7,8 @@ const crypto = require("crypto");
 
 // Disable Mongoose command buffering globally to prevent hanging queries on DB connection issues
 mongoose.set("bufferCommands", false);
+// Apply query-selector sanitization globally; do not rely on connection-only options.
+mongoose.set("sanitizeFilter", true);
 
 const cors = require("cors");
 const cron = require("node-cron");
