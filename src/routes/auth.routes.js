@@ -14,7 +14,7 @@ const brevo = process.env.BREVO_API_KEY ? new BrevoClient({ apiKey: process.env.
 const SESSION_COOKIE = "unitrack_session";
 const CSRF_COOKIE = "unitrack_csrf";
 const SESSION_MAX_AGE = 7 * 24 * 60 * 60 * 1000;
-const secureCookies = process.env.NODE_ENV === "production";
+const secureCookies = process.env.NODE_ENV !== "development";
 
 function setAuthCookies(res, token) {
   const cookieOptions = { path: "/", secure: secureCookies, sameSite: "lax", maxAge: SESSION_MAX_AGE };
