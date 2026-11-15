@@ -4,6 +4,7 @@ const express = require("express");
 const mongoose = require("mongoose");
 const axios = require("axios");
 const crypto = require("crypto");
+const { parseCookieHeader, csrfTokensMatch } = require("./utils/sessionCookies");
 
 // Disable Mongoose command buffering globally to prevent hanging queries on DB connection issues
 mongoose.set("bufferCommands", false);
@@ -106,35 +107,16 @@ app.use(
   })
 );
 
-// Parse cookies without adding a runtime dependency.
+// Parse cookies and enforce CSRF for cookie-authenticated mutations.
 app.use((req, res, next) => {
-  const parsed = {};
-  for (const part of (req.headers.cookie || "").split(";")) {
-    const separator = part.indexOf("=");
-    if (separator < 0) continue;
-    const key = part.slice(0, separator).trim();
-    const value = part.slice(separator + 1).trim();
-    if (!key) continue;
-    try { parsed[key] = decodeURIComponent(value); }
-    catch { parsed[key] = value; }
-  }
-  req.cookies = parsed;
+  req.cookies = parseCookieHeader(req.headers.cookie);
   next();
 });
 
-// Double-submit CSRF protection for requests authenticated by the HttpOnly session cookie.
-// Legacy Bearer-token clients remain supported during the migration window.
 app.use((req, res, next) => {
   if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
   if (!req.cookies?.unitrack_session) return next();
-
-  const cookieToken = req.cookies.unitrack_csrf || "";
-  const headerToken = req.get("x-csrf-token") || "";
-  const cookieBuffer = Buffer.from(cookieToken);
-  const headerBuffer = Buffer.from(headerToken);
-
-  if (!cookieToken || cookieBuffer.length !== headerBuffer.length ||
-      !crypto.timingSafeEqual(cookieBuffer, headerBuffer)) {
+  if (!csrfTokensMatch(req.cookies.unitrack_csrf, req.get("x-csrf-token") || "")) {
     return res.status(403).json({ message: "Request verification failed. Refresh the page and try again." });
   }
   return next();
