@@ -15,7 +15,7 @@ function validateTrackerPayload(body, { partial = false } = {}) {
     return { valid: false, error: "Tracker payload must be a JSON object." };
   }
 
-  const allowed = new Set(["name", "type", "icon", "color", "target", "unit", "entries"]);
+  const allowed = new Set(["name", "type", "icon", "color", "target", "unit", "entries", "entry", "newEntry"]);
   const unknown = Object.keys(body).find((key) => !allowed.has(key));
   if (unknown) return { valid: false, error: `Unsupported tracker field: ${unknown}.` };
 
@@ -60,7 +60,7 @@ function validateTrackerPayload(body, { partial = false } = {}) {
     }
   }
 
-  if (Object.prototype.hasOwnProperty.call(body, "entries")) {
+  for (const field of ["entry", "newEntry"]) {\n    if (Object.prototype.hasOwnProperty.call(body, field) && serializedSize(body[field]) > 128 * 1024) {\n      return { valid: false, error: "Tracker entry exceeds the allowed size." };\n    }\n  }\n\n  if (Object.prototype.hasOwnProperty.call(body, "entries")) {
     if (body.entries === undefined || serializedSize(body.entries) > MAX_TRACKER_PAYLOAD_BYTES) {
       return { valid: false, error: "Tracker entries are missing or exceed the allowed size." };
     }
