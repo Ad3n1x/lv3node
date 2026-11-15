@@ -115,7 +115,14 @@ app.use((req, res, next) => {
 
 app.use((req, res, next) => {
   if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
-  if (!req.cookies?.unitrack_session) return next();
+  const publicAuthEndpoints = new Set([
+    "/api/v1/auth/login",
+    "/api/v1/auth/register",
+    "/api/v1/auth/verify-otp",
+    "/api/v1/auth/forgot-password",
+    "/api/v1/auth/reset-password",
+  ]);
+  if (publicAuthEndpoints.has(req.path) || !req.cookies?.unitrack_session) return next();
   if (!csrfTokensMatch(req.cookies.unitrack_csrf, req.get("x-csrf-token") || "")) {
     return res.status(403).json({ message: "Request verification failed. Refresh the page and try again." });
   }
