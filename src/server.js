@@ -96,7 +96,8 @@ const allowedOrigins = new Set([
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin || allowedOrigins.has(origin)) return callback(null, true);
+      const isUnitrackPreview = /^https:\/\/unitrack-[a-z0-9-]+\.vercel\.app$/i.test(origin || "");
+      if (!origin || allowedOrigins.has(origin) || isUnitrackPreview) return callback(null, true);
       return callback(new Error("Origin not allowed by CORS"));
     },
     credentials: true,
