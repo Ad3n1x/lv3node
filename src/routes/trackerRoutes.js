@@ -42,7 +42,7 @@ router.get("/", verifyToken, async (req, res) => {
     const trackers = await Tracker.find({ userId }).sort({ createdAt: -1 });
     return res.status(200).json(trackers.map((t) => formatTracker(t)));
   } catch (err) {
-    return res.status(500).json({ message: "Error retrieving trackers.", error: err.message });
+    return res.status(500).json({ message: "Error retrieving trackers." });
   }
 });
 
@@ -64,7 +64,7 @@ router.get("/:id", verifyToken, async (req, res) => {
 
     return res.status(200).json(formatTracker(tracker));
   } catch (err) {
-    return res.status(500).json({ message: "Server error", error: err.message });
+    return res.status(500).json({ message: "Server error." });
   }
 });
 
@@ -98,7 +98,7 @@ router.post("/", verifyToken, async (req, res) => {
     return res.status(201).json(formatTracker(savedTracker));
   } catch (err) {
     console.error("Tracker creation error:", err.message);
-    return res.status(400).json({ message: "Failed to create tracker.", error: err.message });
+    return res.status(500).json({ message: "Failed to create tracker." });
   }
 });
 
@@ -133,7 +133,7 @@ router.post("/:id/entries", verifyToken, async (req, res) => {
     return res.status(200).json(formatTracker(updatedTracker));
   } catch (err) {
     console.error("Failed to add entry:", err);
-    return res.status(400).json({ message: "Failed to add entry.", error: err.message });
+    return res.status(500).json({ message: "Failed to add entry." });
   }
 });
 
@@ -182,7 +182,7 @@ router.put("/:id", verifyToken, async (req, res) => {
     return res.status(200).json(formatTracker(updatedTracker));
   } catch (err) {
     console.error("Failed to update tracker:", err);
-    return res.status(500).json({ message: "Failed to update tracker.", error: err.message });
+    return res.status(500).json({ message: "Failed to update tracker." });
   }
 });
 
@@ -203,7 +203,7 @@ router.delete("/:id", verifyToken, async (req, res) => {
     return res.status(200).json({ message: "Tracker deleted successfully.", id });
   } catch (err) {
     console.error("Failed to delete tracker:", err);
-    return res.status(500).json({ message: "Failed to delete tracker.", error: err.message });
+    return res.status(500).json({ message: "Failed to delete tracker." });
   }
 });
 
