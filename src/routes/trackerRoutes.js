@@ -13,7 +13,7 @@ const requirePro = typeof rawRequirePro === "function"
   ? rawRequirePro 
   : (rawRequirePro.requirePro || rawRequirePro.default);
 
-const router = express.Router();
+const { validateTrackerPayload } = require("../utils/trackerValidation");\n\nconst router = express.Router();
 const auth = verifyToken; // Alias for compatibility across all routes
 
 // 🛡️ Helper: Safely extracts user ID from any JWT payload structure
@@ -74,14 +74,12 @@ router.post("/", verifyToken, async (req, res) => {
       return res.status(401).json({ message: "Unauthorized: User ID could not be extracted from token." });
     }
 
-    const { name, type, icon, color, target, unit, entries } = req.body || {};
-
-    if (!name || !type) {
-      return res.status(400).json({ 
-        message: "Validation Error: 'name' and 'type' are required fields.",
-        receivedBody: req.body 
-      });
+    const validation = validateTrackerPayload(req.body || {});
+    if (!validation.valid) {
+      return res.status(400).json({ message: validation.error });
     }
+
+    const { name, type, icon, color, target, unit, entries } = req.body;
 
     const tracker = new Tracker({
       userId,
@@ -154,6 +152,10 @@ router.put("/:id", verifyToken, async (req, res) => {
     }
 
     const body = req.body || {};
+    const validation = validateTrackerPayload(body, { partial: true });
+    if (!validation.valid) {
+      return res.status(400).json({ message: validation.error });
+    }
 
     if (body.name !== undefined) tracker.name = body.name.trim();
     if (body.type !== undefined) tracker.type = body.type;
