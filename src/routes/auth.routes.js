@@ -1,4 +1,5 @@
 const express = require("express");
+const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const rateLimit = require("express-rate-limit");
@@ -10,6 +11,23 @@ const middleware = require("../middleware/auth");
 const verifyToken = typeof middleware === "function" ? middleware : middleware.verifyToken;
 const router = express.Router();
 const brevo = process.env.BREVO_API_KEY ? new BrevoClient({ apiKey: process.env.BREVO_API_KEY }) : null;
+const SESSION_COOKIE = "unitrack_session";
+const CSRF_COOKIE = "unitrack_csrf";
+const SESSION_MAX_AGE = 7 * 24 * 60 * 60 * 1000;
+const secureCookies = process.env.NODE_ENV === "production";
+
+function setAuthCookies(res, token) {
+  const cookieOptions = { path: "/", secure: secureCookies, sameSite: "lax", maxAge: SESSION_MAX_AGE };
+  res.cookie(SESSION_COOKIE, token, { ...cookieOptions, httpOnly: true });
+  res.cookie(CSRF_COOKIE, crypto.randomBytes(32).toString("hex"), { ...cookieOptions, httpOnly: false });
+}
+
+function clearAuthCookies(res) {
+  const cookieOptions = { path: "/", secure: secureCookies, sameSite: "lax" };
+  res.clearCookie(SESSION_COOKIE, { ...cookieOptions, httpOnly: true });
+  res.clearCookie(CSRF_COOKIE, { ...cookieOptions, httpOnly: false });
+}
+
 
 const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: true, legacyHeaders: false, message: { message: "Too many attempts. Please wait 15 minutes and try again." } });
 const otpLimiter = rateLimit({ windowMs: 10 * 60 * 1000, limit: 5, standardHeaders: true, legacyHeaders: false, message: { message: "Too many code attempts. Please wait before trying again." } });
@@ -110,9 +128,7 @@ router.post("/verify-otp", otpLimiter, async (req, res) => {
     if (user.isVerified) return res.status(409).json({ message: "This account is already verified." });
     if (!(await consumeOtp(user, email, "verify", otp))) return res.status(400).json({ message: "Invalid or expired verification code." });
     user.isVerified = true; clearOtpFields(user); await user.save();
-    if (!process.env.JWT_SECRET) return res.status(503).json({ message: "Authentication is temporarily unavailable." });
-    const token = jwt.sign({ id: user._id, userId: user._id, email: user.email }, process.env.JWT_SECRET, { expiresIn: "7d", issuer: "unitrack-api", audience: "unitrack-app" });
-    return res.status(200).json({ status: "success", token, message: "Email verified successfully!", user: { id: user._id, firstName: user.firstName, lastName: user.lastName, email: user.email } });
+    return res.status(200).json({ status: "success", message: "Email verified successfully!", user: { id: user._id, firstName: user.firstName, lastName: user.lastName, email: user.email } });
   } catch (error) {
     console.error("OTP verification failed:", error.message);
     return res.status(500).json({ message: "Verification could not be completed." });
@@ -128,7 +144,8 @@ router.post("/login", authLimiter, async (req, res) => {
     const user = await User.findOne({ email });
     if (!user || !user.isVerified || !(await bcrypt.compare(password, user.password))) return res.status(401).json({ message: "Invalid email or password, or account not verified." });
     const token = jwt.sign({ id: user._id, userId: user._id, email: user.email }, process.env.JWT_SECRET, { expiresIn: "7d", issuer: "unitrack-api", audience: "unitrack-app" });
-    return res.status(200).json({ status: "success", token, message: "Login successful!", user: { id: user._id, firstName: user.firstName, lastName: user.lastName, email: user.email } });
+    setAuthCookies(res, token);
+    return res.status(200).json({ status: "success", message: "Login successful!", user: { id: user._id, firstName: user.firstName, lastName: user.lastName, email: user.email } });
   } catch (error) {
     console.error("Login failed:", error.message);
     return res.status(500).json({ message: "Login could not be completed." });
@@ -184,6 +201,11 @@ router.post("/reset-password", otpLimiter, async (req, res) => {
     console.error("Password reset failed:", error.message);
     return res.status(500).json({ message: "Password reset could not be completed." });
   }
+});
+
+router.post("/logout", (req, res) => {
+  clearAuthCookies(res);
+  return res.status(200).json({ message: "Signed out successfully." });
 });
 
 router.get("/me", verifyToken, async (req, res) => {
