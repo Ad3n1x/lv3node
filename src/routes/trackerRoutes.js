@@ -13,7 +13,7 @@ const requirePro = typeof rawRequirePro === "function"
   ? rawRequirePro 
   : (rawRequirePro.requirePro || rawRequirePro.default);
 
-const { validateTrackerPayload } = require("../utils/trackerValidation");
+const { validateTrackerPayload, validateTrackerEntryPayload } = require("../utils/trackerValidation");
 
 const router = express.Router();
 const auth = verifyToken; // Alias for compatibility across all routes
@@ -118,15 +118,15 @@ router.post("/:id/entries", verifyToken, async (req, res) => {
       return res.status(404).json({ message: "Tracker not found or unauthorized." });
     }
 
-    if (!req.body || Object.keys(req.body).length === 0) {
-      return res.status(400).json({ message: "Entry data cannot be empty." });
+    const validation = validateTrackerEntryPayload(req.body);
+    if (!validation.valid) {
+      return res.status(400).json({ message: validation.error });
+    }
+    if (!Array.isArray(tracker.entries)) {
+      return res.status(409).json({ message: "This tracker stores encrypted entries. Update its encrypted entries collection instead." });
     }
 
-    if (Array.isArray(tracker.entries)) {
-      tracker.entries.push(req.body);
-    } else {
-      tracker.entries = req.body;
-    }
+    tracker.entries.push(req.body);
     tracker.markModified("entries");
 
     const updatedTracker = await tracker.save();
