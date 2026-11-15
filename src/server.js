@@ -101,9 +101,44 @@ app.use(
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "x-cron-secret", "x-alatpay-signature"],
+    allowedHeaders: ["Content-Type", "Authorization", "x-csrf-token", "x-cron-secret", "x-alatpay-signature"],
   })
 );
+
+// Parse cookies without adding a runtime dependency.
+app.use((req, res, next) => {
+  const parsed = {};
+  for (const part of (req.headers.cookie || "").split(";")) {
+    const separator = part.indexOf("=");
+    if (separator < 0) continue;
+    const key = part.slice(0, separator).trim();
+    const value = part.slice(separator + 1).trim();
+    if (!key) continue;
+    try { parsed[key] = decodeURIComponent(value); }
+    catch { parsed[key] = value; }
+  }
+  req.cookies = parsed;
+  next();
+});
+
+// Double-submit CSRF protection for requests authenticated by the HttpOnly session cookie.
+// Legacy Bearer-token clients remain supported during the migration window.
+app.use((req, res, next) => {
+  if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
+  if (!req.cookies?.unitrack_session) return next();
+
+  const cookieToken = req.cookies.unitrack_csrf || "";
+  const headerToken = req.get("x-csrf-token") || "";
+  const cookieBuffer = Buffer.from(cookieToken);
+  const headerBuffer = Buffer.from(headerToken);
+
+  if (!cookieToken || cookieBuffer.length !== headerBuffer.length ||
+      !crypto.timingSafeEqual(cookieBuffer, headerBuffer)) {
+    return res.status(403).json({ message: "Request verification failed. Refresh the page and try again." });
+  }
+  return next();
+});
+
 
 app.use((req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
