@@ -79,4 +79,14 @@ function validateTrackerPayload(body, { partial = false } = {}) {
   return { valid: true, error: null };
 }
 
-module.exports = { validateTrackerPayload };
+function validateTrackerEntryPayload(entry) {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    return { valid: false, error: "Tracker entry must be a JSON object." };
+  }
+  if (serializedSize(entry) > 128 * 1024) {
+    return { valid: false, error: "Tracker entry exceeds the allowed size." };
+  }
+  return { valid: true, error: null };
+}
+
+module.exports = { validateTrackerPayload, validateTrackerEntryPayload };
