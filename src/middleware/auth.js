@@ -4,11 +4,14 @@ const User = require("../models/User");
 // 1. Authentication Middleware (Verifies JWT token)
 const verifyToken = (req, res, next) => {
   const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+  const bearerToken = authHeader && authHeader.startsWith("Bearer ")
+    ? authHeader.split(" ")[1]
+    : null;
+  const token = bearerToken || req.cookies?.unitrack_session;
+
+  if (!token) {
     return res.status(401).json({ message: "Access denied. No token provided." });
   }
-
-  const token = authHeader.split(" ")[1];
   if (!process.env.JWT_SECRET) {
     return res.status(503).json({ message: "Authentication is temporarily unavailable." });
   }

@@ -13,6 +13,8 @@ const requirePro = typeof rawRequirePro === "function"
   ? rawRequirePro 
   : (rawRequirePro.requirePro || rawRequirePro.default);
 
+const { validateTrackerPayload, validateTrackerEntryPayload } = require("../utils/trackerValidation");
+
 const router = express.Router();
 const auth = verifyToken; // Alias for compatibility across all routes
 
@@ -40,7 +42,7 @@ router.get("/", verifyToken, async (req, res) => {
     const trackers = await Tracker.find({ userId }).sort({ createdAt: -1 });
     return res.status(200).json(trackers.map((t) => formatTracker(t)));
   } catch (err) {
-    return res.status(500).json({ message: "Error retrieving trackers.", error: err.message });
+    return res.status(500).json({ message: "Error retrieving trackers." });
   }
 });
 
@@ -62,7 +64,7 @@ router.get("/:id", verifyToken, async (req, res) => {
 
     return res.status(200).json(formatTracker(tracker));
   } catch (err) {
-    return res.status(500).json({ message: "Server error", error: err.message });
+    return res.status(500).json({ message: "Server error." });
   }
 });
 
@@ -74,14 +76,12 @@ router.post("/", verifyToken, async (req, res) => {
       return res.status(401).json({ message: "Unauthorized: User ID could not be extracted from token." });
     }
 
-    const { name, type, icon, color, target, unit, entries } = req.body || {};
-
-    if (!name || !type) {
-      return res.status(400).json({ 
-        message: "Validation Error: 'name' and 'type' are required fields.",
-        receivedBody: req.body 
-      });
+    const validation = validateTrackerPayload(req.body || {});
+    if (!validation.valid) {
+      return res.status(400).json({ message: validation.error });
     }
+
+    const { name, type, icon, color, target, unit, entries } = req.body;
 
     const tracker = new Tracker({
       userId,
@@ -98,7 +98,7 @@ router.post("/", verifyToken, async (req, res) => {
     return res.status(201).json(formatTracker(savedTracker));
   } catch (err) {
     console.error("Tracker creation error:", err.message);
-    return res.status(400).json({ message: "Failed to create tracker.", error: err.message });
+    return res.status(500).json({ message: "Failed to create tracker." });
   }
 });
 
@@ -118,22 +118,22 @@ router.post("/:id/entries", verifyToken, async (req, res) => {
       return res.status(404).json({ message: "Tracker not found or unauthorized." });
     }
 
-    if (!req.body || Object.keys(req.body).length === 0) {
-      return res.status(400).json({ message: "Entry data cannot be empty." });
+    const validation = validateTrackerEntryPayload(req.body);
+    if (!validation.valid) {
+      return res.status(400).json({ message: validation.error });
+    }
+    if (!Array.isArray(tracker.entries)) {
+      return res.status(409).json({ message: "This tracker stores encrypted entries. Update its encrypted entries collection instead." });
     }
 
-    if (Array.isArray(tracker.entries)) {
-      tracker.entries.push(req.body);
-    } else {
-      tracker.entries = req.body;
-    }
+    tracker.entries.push(req.body);
     tracker.markModified("entries");
 
     const updatedTracker = await tracker.save();
     return res.status(200).json(formatTracker(updatedTracker));
   } catch (err) {
     console.error("Failed to add entry:", err);
-    return res.status(400).json({ message: "Failed to add entry.", error: err.message });
+    return res.status(500).json({ message: "Failed to add entry." });
   }
 });
 
@@ -154,6 +154,10 @@ router.put("/:id", verifyToken, async (req, res) => {
     }
 
     const body = req.body || {};
+    const validation = validateTrackerPayload(body, { partial: true });
+    if (!validation.valid) {
+      return res.status(400).json({ message: validation.error });
+    }
 
     if (body.name !== undefined) tracker.name = body.name.trim();
     if (body.type !== undefined) tracker.type = body.type;
@@ -178,7 +182,7 @@ router.put("/:id", verifyToken, async (req, res) => {
     return res.status(200).json(formatTracker(updatedTracker));
   } catch (err) {
     console.error("Failed to update tracker:", err);
-    return res.status(500).json({ message: "Failed to update tracker.", error: err.message });
+    return res.status(500).json({ message: "Failed to update tracker." });
   }
 });
 
@@ -199,7 +203,7 @@ router.delete("/:id", verifyToken, async (req, res) => {
     return res.status(200).json({ message: "Tracker deleted successfully.", id });
   } catch (err) {
     console.error("Failed to delete tracker:", err);
-    return res.status(500).json({ message: "Failed to delete tracker.", error: err.message });
+    return res.status(500).json({ message: "Failed to delete tracker." });
   }
 });
 

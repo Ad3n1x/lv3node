@@ -4,6 +4,7 @@ const express = require("express");
 const mongoose = require("mongoose");
 const axios = require("axios");
 const crypto = require("crypto");
+const { parseCookieHeader, csrfTokensMatch } = require("./utils/sessionCookies");
 
 // Disable Mongoose command buffering globally to prevent hanging queries on DB connection issues
 mongoose.set("bufferCommands", false);
@@ -96,14 +97,38 @@ const allowedOrigins = new Set([
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin || allowedOrigins.has(origin)) return callback(null, true);
+      const isUnitrackPreview = /^https:\/\/unitrack-[a-z0-9-]+\.vercel\.app$/i.test(origin || "");
+      if (!origin || allowedOrigins.has(origin) || isUnitrackPreview) return callback(null, true);
       return callback(new Error("Origin not allowed by CORS"));
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "x-cron-secret", "x-alatpay-signature"],
+    allowedHeaders: ["Content-Type", "Authorization", "x-csrf-token", "x-cron-secret", "x-alatpay-signature"],
   })
 );
+
+// Parse cookies and enforce CSRF for cookie-authenticated mutations.
+app.use((req, res, next) => {
+  req.cookies = parseCookieHeader(req.headers.cookie);
+  next();
+});
+
+app.use((req, res, next) => {
+  if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
+  const publicAuthEndpoints = new Set([
+    "/api/v1/auth/login",
+    "/api/v1/auth/register",
+    "/api/v1/auth/verify-otp",
+    "/api/v1/auth/forgot-password",
+    "/api/v1/auth/reset-password",
+  ]);
+  if (publicAuthEndpoints.has(req.path) || !req.cookies?.unitrack_session) return next();
+  if (!csrfTokensMatch(req.cookies.unitrack_csrf, req.get("x-csrf-token") || "")) {
+    return res.status(403).json({ message: "Request verification failed. Refresh the page and try again." });
+  }
+  return next();
+});
+
 
 app.use((req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
