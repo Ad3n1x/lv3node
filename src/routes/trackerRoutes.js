@@ -13,7 +13,9 @@ const requirePro = typeof rawRequirePro === "function"
   ? rawRequirePro 
   : (rawRequirePro.requirePro || rawRequirePro.default);
 
-const { validateTrackerPayload } = require("../utils/trackerValidation");\n\nconst router = express.Router();
+const { validateTrackerPayload } = require("../utils/trackerValidation");
+
+const router = express.Router();
 const auth = verifyToken; // Alias for compatibility across all routes
 
 // 🛡️ Helper: Safely extracts user ID from any JWT payload structure
