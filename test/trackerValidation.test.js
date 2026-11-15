@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { validateTrackerPayload } = require("../src/utils/trackerValidation");
+const { validateTrackerPayload, validateTrackerEntryPayload } = require("../src/utils/trackerValidation");
 
 test("accepts supported tracker creation payloads", () => {
   assert.equal(validateTrackerPayload({
@@ -40,4 +40,10 @@ test("rejects unsafe colors and oversized fields", () => {
 test("supports partial updates while rejecting empty updates", () => {
   assert.equal(validateTrackerPayload({ color: "#ffffff" }, { partial: true }).valid, true);
   assert.equal(validateTrackerPayload({}, { partial: true }).valid, false);
+});
+
+test("rejects invalid and oversized standalone entries", () => {
+  assert.equal(validateTrackerEntryPayload({ value: 3, date: "2026-11-15" }).valid, true);
+  assert.equal(validateTrackerEntryPayload("not-an-object").valid, false);
+  assert.equal(validateTrackerEntryPayload({ note: "x".repeat(128 * 1024) }).valid, false);
 });
