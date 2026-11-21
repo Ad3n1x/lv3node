@@ -152,6 +152,48 @@ router.post("/login", authLimiter, async (req, res) => {
   }
 });
 
+router.get("/public-key", verifyToken, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select("publicKey");
+    if (!user) return res.status(404).json({ message: "User not found." });
+    return res.status(200).json({ publicKey: user.publicKey || null });
+  } catch (error) {
+    console.error("Public-key lookup failed:", error.message);
+    return res.status(500).json({ message: "Could not retrieve the public key." });
+  }
+});
+
+router.get("/key-vault/recovery", verifyToken, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select("+privateKeyRecovery");
+    if (!user) return res.status(404).json({ message: "User not found." });
+    return res.status(200).json({ envelope: user.privateKeyRecovery || null });
+  } catch (error) {
+    console.error("Key-vault recovery lookup failed:", error.message);
+    return res.status(500).json({ message: "Could not retrieve the encrypted recovery envelope." });
+  }
+});
+
+router.post("/key-vault/recovery", verifyToken, async (req, res) => {
+  try {
+    const { isValidRecoveryEnvelope } = require("../utils/recoveryEnvelope");
+    const envelope = req.body?.envelope;
+    if (!isValidRecoveryEnvelope(envelope)) {
+      return res.status(400).json({ message: "Invalid encrypted recovery envelope." });
+    }
+
+    const user = await User.findById(req.user.id).select("+privateKeyRecovery");
+    if (!user) return res.status(404).json({ message: "User not found." });
+
+    user.privateKeyRecovery = envelope;
+    await user.save();
+    return res.status(200).json({ message: "Encrypted recovery envelope saved." });
+  } catch (error) {
+    console.error("Key-vault recovery save failed:", error.message);
+    return res.status(500).json({ message: "Could not save the encrypted recovery envelope." });
+  }
+});
+
 router.post("/public-key", verifyToken, async (req, res) => {
   try {
     const publicKey = String(req.body.publicKey || "").trim();
