@@ -9,6 +9,12 @@ This document defines the operational controls required for a production deploym
 - Device private-key recovery codes protect access to encrypted tracker payloads. They do not restore a deleted MongoDB database.
 - Offline snapshots are account-scoped browser storage and are not a server backup.
 
+## Encrypted tracker-key recovery envelope
+
+The API contract adds authenticated `GET /api/v1/auth/key-vault/recovery` and `POST /api/v1/auth/key-vault/recovery` routes. The POST route accepts only the version-2 PBKDF2-SHA256/AES-GCM encrypted envelope shape used by the candidate frontend; it rejects extra fields and does not accept plaintext private-key fields. The envelope is stored per authenticated user and is excluded from normal user queries by default.
+
+This server-side storage is only one part of recovery. The frontend must create the envelope from the private key, protect it with a user-held password/recovery code, verify that the server accepted the upload, and provide a tested recovery workflow on a second browser/device. Never display a recovery code as saved or synced until the server confirms success. The current main frontend does not yet provide that complete user-facing workflow. A stored encrypted envelope is not a database backup and cannot recover deleted tracker records.
+
 ## Required production backup configuration
 
 Configure these controls in the MongoDB Atlas project that owns the production database:
