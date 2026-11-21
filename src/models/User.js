@@ -54,6 +54,7 @@ const userSchema = new mongoose.Schema(
     otpAttempts: { type: Number, default: 0, select: false },
     otpExpires: { type: Date, select: false },
     publicKey: { type: String },
+    privateKeyRecovery: { type: mongoose.Schema.Types.Mixed, default: null, select: false },
     
     // Subscription & Expiration Tracking
     isPremiumRaw: { type: Boolean, default: false, alias: "isPremiumStored" },
